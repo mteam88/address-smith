@@ -18,7 +18,7 @@ use log::{info, warn};
 use crate::{
     error::{Result, WalletError},
     tree::TreeNode,
-    types::{ExecutionResult, Operation},
+    types::{ExecutionResult, NodeExecutionResult, Operation},
     utils::{get_eth_price, GAS_LIMIT},
 };
 
@@ -125,7 +125,67 @@ impl WalletManager {
         })
     }
 
+    /// Executes operations in parallel, ensuring parent operations complete before children
+    pub async fn parallel_execute_operations(&mut self) -> Result<ExecutionResult> {
+        let start_time = tokio::time::Instant::now();
+
+        let root_wallet = self
+            .operations
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .value
+            .from
+            .clone();
+        let initial_balance = self.get_wallet_balance(&root_wallet).await?;
+        let mut new_wallets = HashSet::new();
+
+        let node_result = self
+            .execute_node(Arc::clone(self.operations.as_ref().unwrap()))
+            .await?;
+        let final_balance = self.get_wallet_balance(&root_wallet).await?;
+
+        new_wallets.extend(node_result.new_wallets);
+
+        Ok(ExecutionResult {
+            new_wallets_count: new_wallets.len() as i32,
+            initial_balance,
+            final_balance,
+            root_wallet,
+            time_elapsed: start_time.elapsed(),
+        })
+    }
+
+    async fn execute_node(
+        &self,
+        node: Arc<Mutex<TreeNode<Operation>>>,
+    ) -> Result<NodeExecutionResult> {
+        // execute operation
+        let operation = {
+            let guard = node.lock().unwrap();
+            guard.value.clone()
+        };
+        let mut new_wallets = HashSet::new();
+        self.log(&format!("Executing operation: {}", operation))?;
+        self.process_single_operation(&operation, &mut new_wallets)
+            .await?;
+
+        // spawn new threads to execute children
+        let children = {
+            let guard = node.lock().unwrap();
+            guard.children.clone()
+        };
+        for child in &children {
+            let child_result = Box::pin(self.execute_node(child.clone())).await?;
+            new_wallets.extend(child_result.new_wallets);
+        }
+
+        Ok(NodeExecutionResult { new_wallets })
+    }
+
     /// Prepares and validates the list of operations to be executed
+    /// Note: this function is used to flatten an operation tree into a list of operations and is therefore not compatible with parallel execution
     fn prepare_operations(&self) -> Result<Vec<Operation>> {
         let operations = self.operations.as_ref().ok_or_else(|| {
             WalletError::WalletOperationError("No operations configured".to_string())

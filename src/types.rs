@@ -6,7 +6,10 @@
 use alloy::{network::EthereumWallet, primitives::U256};
 use alloy_primitives::utils::format_units;
 use core::fmt;
-use std::fmt::{Debug, Display};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display},
+};
 use tokio::time::Duration;
 
 /// Represents a single transfer operation between two wallets.
@@ -31,7 +34,7 @@ impl Display for Operation {
                     format_units(amount, "ether").unwrap(),
                     self.from.default_signer().address(),
                     self.to.default_signer().address()
-            )
+                )
             } else {
                 writeln!(
                     f,
@@ -41,10 +44,7 @@ impl Display for Operation {
                 )
             }
         } else {
-            writeln!(
-                f,
-                "NOOP"
-            )
+            writeln!(f, "NOOP")
         }
     }
 }
@@ -62,4 +62,8 @@ pub struct ExecutionResult {
     pub root_wallet: EthereumWallet,
     /// Total time taken to execute all operations
     pub time_elapsed: Duration,
+}
+
+pub struct NodeExecutionResult {
+    pub new_wallets: HashSet<alloy::primitives::Address>,
 }
