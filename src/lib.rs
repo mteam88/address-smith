@@ -8,6 +8,8 @@
 
 /// Error types and results for wallet operations
 pub mod error;
+/// Operations for the wallet manager
+pub mod operations;
 /// Tree data structure for organizing dependent operations
 pub mod tree;
 /// Core type definitions for wallet operations
