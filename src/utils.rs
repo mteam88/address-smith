@@ -43,7 +43,7 @@ pub async fn generate_wallet(backup_dir: &Path) -> Result<EthereumWallet> {
     let signer = PrivateKeySigner::random();
 
     // backup private key to file
-    let backup_path = backup_dir.join(format!("wallet_{}.json", signer.address()));
+    let backup_path = backup_dir.join(format!("backup_wallet_{}.txt", signer.address()));
     std::fs::write(backup_path, signer.to_bytes().to_string())
         .map_err(|e| WalletError::ProviderError(format!("Failed to backup private key: {}", e)))?;
 
