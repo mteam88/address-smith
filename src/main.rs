@@ -21,30 +21,43 @@ use tokio::time::Duration;
 const GAS_LIMIT: u64 = 21000;
 const GAS_BUFFER_MULTIPLIER: u64 = 2;
 
+/// A manager for handling wallet operations and transactions.
+/// Responsible for executing operations, logging transactions, and managing the operation tree.
 struct WalletManager {
+    /// Unique identifier for the wallet manager instance
     id: usize,
+    /// Ethereum network provider for interacting with the blockchain
     provider: Arc<dyn Provider<Ethereum>>,
-    /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
+    /// Operations tree. Every sub-operation is dependent on the completion of its parent operation
     operations: Option<Arc<Mutex<TreeNode<Operation>>>>,
+    /// Path to the log file where transaction details and statistics are recorded
     log_file: PathBuf,
 }
 
+/// Result of executing a series of wallet operations.
+/// Contains statistics about the execution including balances and timing information.
 struct ExecutionResult {
+    /// Number of new wallets that were activated during execution
     new_wallets_count: i32,
+    /// Initial balance of the root wallet before operations began
     initial_balance: U256,
+    /// Final balance of the root wallet after all operations completed
     final_balance: U256,
+    /// The original wallet that initiated the operation sequence
     root_wallet: EthereumWallet,
+    /// Total time taken to execute all operations
     time_elapsed: Duration,
 }
 
-/// an operation is an amount of funds to send to a wallet, from another wallet.
+/// Represents a single transfer operation between two wallets.
+/// An operation defines the source wallet, destination wallet, and the amount to transfer.
 #[derive(Debug, Clone)]
 struct Operation {
-    /// the wallet to draw funds from
+    /// The wallet to draw funds from
     from: EthereumWallet,
-    /// the wallet to send the funds to
+    /// The wallet to send the funds to
     to: EthereumWallet,
-    /// if None, the operation will send all available funds - reserving a buffer for gas
+    /// If None, the operation will send all available funds minus a gas buffer
     amount: Option<U256>,
 }
 
@@ -61,6 +74,14 @@ impl Display for Operation {
 }
 
 impl WalletManager {
+    /// Creates a new WalletManager instance with the specified ID and provider.
+    ///
+    /// # Arguments
+    /// * `id` - Unique identifier for this wallet manager
+    /// * `provider` - Ethereum network provider for blockchain interactions
+    ///
+    /// # Returns
+    /// * `Result<Self>` - New WalletManager instance or error
     async fn new(id: usize, provider: Arc<dyn Provider<Ethereum>>) -> Result<Self> {
         let log_file = PathBuf::from(format!("wallet_manager_{}.log", id));
 
@@ -72,12 +93,18 @@ impl WalletManager {
         })
     }
 
-    /// Execute all operations, keeping dependencies in mind.
+    /// Executes all operations in parallel while respecting dependencies.
+    /// Currently a placeholder for future implementation.
     async fn parallel_execute_operations(self) -> Result<()> {
         // TODO: Implement
         Ok(())
     }
 
+    /// Executes all operations sequentially in the order defined by the operation tree.
+    /// Tracks new wallet activations and maintains operation dependencies.
+    ///
+    /// # Returns
+    /// * `Result<ExecutionResult>` - Statistics about the execution including balances and timing
     async fn sequential_execute_operations(&mut self) -> Result<ExecutionResult> {
         let start_time = tokio::time::Instant::now();
 
@@ -133,6 +160,13 @@ impl WalletManager {
         })
     }
 
+    /// Logs a message to both the log file and console with timestamp.
+    ///
+    /// # Arguments
+    /// * `message` - The message to log
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error in logging
     fn log(&self, message: &str) -> Result<()> {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let log_message = format!("[{}] {}\n", timestamp, message);
@@ -147,6 +181,15 @@ impl WalletManager {
         Ok(())
     }
 
+    /// Builds a transaction request with appropriate gas settings and nonce.
+    ///
+    /// # Arguments
+    /// * `from_wallet` - The wallet sending the transaction
+    /// * `to_address` - Destination address for the transaction
+    /// * `value` - Optional amount to send, if None sends maximum available minus gas buffer
+    ///
+    /// # Returns
+    /// * `Result<TransactionRequest>` - The constructed transaction request
     async fn build_transaction(
         &self,
         from_wallet: EthereumWallet,
@@ -183,6 +226,12 @@ impl WalletManager {
             .with_chain_id(chain_id))
     }
 
+    /// Sends a transaction and waits for confirmation.
+    /// Logs transaction details including hash and value.
+    ///
+    /// # Arguments
+    /// * `tx` - The transaction request to send
+    /// * `wallet` - The wallet to sign and send the transaction with
     async fn send_transaction(&self, tx: TransactionRequest, wallet: EthereumWallet) -> Result<()> {
         self.log("Sending transaction...")?;
         let tx_envelope = tx.clone().build(&wallet).await?;
@@ -206,6 +255,10 @@ impl WalletManager {
         Ok(())
     }
 
+    /// Combines transaction building and sending for a given operation.
+    ///
+    /// # Arguments
+    /// * `operation` - The operation to execute
     async fn build_and_send_operation(&self, operation: Operation) -> Result<()> {
         let tx = self
             .build_transaction(
@@ -218,6 +271,11 @@ impl WalletManager {
         Ok(())
     }
 
+    /// Prints detailed statistics about the execution results.
+    /// Includes timing, costs, and balance information.
+    ///
+    /// # Arguments
+    /// * `execution_result` - The results to print statistics for
     async fn print_statistics(&self, execution_result: ExecutionResult) -> Result<()> {
         let total_duration = execution_result.time_elapsed;
         let eth_spent = execution_result.initial_balance - execution_result.final_balance;
@@ -299,6 +357,15 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
+/// Generates a sequence of operations forming a loop starting and ending with the first wallet.
+/// Creates a chain where each operation transfers funds to a new wallet, ultimately returning to the first.
+///
+/// # Arguments
+/// * `first_wallet` - The wallet to start and end the loop with
+/// * `total_new_wallets` - Number of new wallets to create in the chain
+///
+/// # Returns
+/// * `Result<Arc<Mutex<TreeNode<Operation>>>>` - Tree structure of operations
 async fn generate_operation_loop(
     first_wallet: EthereumWallet,
     total_new_wallets: i32,
@@ -341,12 +408,20 @@ async fn generate_operation_loop(
     Ok(root)
 }
 
+/// Generates a new random Ethereum wallet.
+///
+/// # Returns
+/// * `Result<EthereumWallet>` - A new wallet with random private key
 async fn generate_wallet() -> Result<EthereumWallet> {
     let signer = PrivateKeySigner::random();
     let wallet = EthereumWallet::new(signer);
     Ok(wallet)
 }
 
+/// Fetches the current ETH/USD price from Coinbase API.
+///
+/// # Returns
+/// * `Result<f64>` - Current ETH price in USD
 async fn get_eth_price() -> Result<f64> {
     let response = reqwest::get("https://api.coinbase.com/v2/prices/ETH-USD/spot").await?;
     let body = response.text().await?;
@@ -355,13 +430,21 @@ async fn get_eth_price() -> Result<f64> {
     Ok(price)
 }
 
+/// A tree structure for organizing dependent operations.
+/// Each node can have multiple children, representing operations that depend on the parent.
 #[derive(Debug)]
 struct TreeNode<T> {
+    /// The value stored in this node
     value: T,
+    /// Child nodes representing dependent operations
     children: Vec<Arc<Mutex<TreeNode<T>>>>,
 }
 
 impl<T: Clone + Debug> TreeNode<T> {
+    /// Creates a new tree node with the given value.
+    ///
+    /// # Arguments
+    /// * `value` - The value to store in the node
     fn new(value: T) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(TreeNode {
             value,
@@ -369,11 +452,19 @@ impl<T: Clone + Debug> TreeNode<T> {
         }))
     }
 
+    /// Adds a child node to the parent node.
+    ///
+    /// # Arguments
+    /// * `parent` - The parent node to add the child to
+    /// * `child` - The child node to add
     fn add_child(parent: Arc<Mutex<Self>>, child: Arc<Mutex<TreeNode<T>>>) {
         parent.lock().unwrap().children.push(child);
     }
 
-    /// Flattens the tree so that any parent operation is executed before any of it's children.
+    /// Flattens the tree into a vector where parent operations precede their children.
+    ///
+    /// # Returns
+    /// * `Vec<T>` - Flattened list of operations in dependency order
     fn flatten(&self) -> Vec<T> {
         let mut operations_list = vec![];
         operations_list.push(self.value.clone());
