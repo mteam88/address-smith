@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { version = "0.1.0", features = ["providers", "network", "primitives", "rpc"] }
+alloy = { version = "0.12.6", features = ["providers", "network", "rpc"] }
+alloy-primitives = "0.8.23"
 chrono = "0.4"
 dotenv = "0.15"
 env_logger = "0.10"
