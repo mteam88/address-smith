@@ -4,17 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { version = "0.12.6", features = ["full"] }
-tokio = { version = "1.36", features = ["full"] }
-eyre = "0.6"
-rand = "0.8"
-dotenv = "0.15"
-url = "2.5"
-hex = "0.4"
-k256 = "0.13"
-reqwest = "0.12.15"
-serde_json = "1.0.140"
-log = "0.4"
-env_logger = "0.10"
-tokio-stream = "0.1"
+alloy = { version = "0.1.0", features = ["providers", "network", "primitives", "rpc"] }
 chrono = "0.4"
+dotenv = "0.15"
+env_logger = "0.10"
+eyre = "0.6"
+log = "0.4"
+reqwest = "0.11"
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }

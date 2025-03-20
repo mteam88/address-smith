@@ -1,26 +1,40 @@
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{utils::format_units, U256},
+    primitives::{map::HashSet, utils::format_units, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
-    signers::local::{LocalSigner, PrivateKeySigner},
+    signers::local::PrivateKeySigner,
 };
+use core::fmt;
 use dotenv::dotenv;
 use eyre::Result;
 use log::info;
-use std::{io::Write, ops::Mul, path::PathBuf, sync::Arc, sync::Mutex};
+use std::{
+    fmt::{Debug, Display},
+    io::Write,
+    ops::Mul,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+use tokio::time::Duration;
 
 const GAS_LIMIT: u64 = 21000;
-const GAS_BUFFER_MULTIPLIER: u64 = 4;
+const GAS_BUFFER_MULTIPLIER: u64 = 2;
 
 struct WalletManager {
     id: usize,
     provider: Arc<dyn Provider<Ethereum>>,
     /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
     operations: Option<Arc<Mutex<TreeNode<Operation>>>>,
-    start_time: tokio::time::Instant,
-    activated_wallets: Arc<Mutex<usize>>,
     log_file: PathBuf,
+}
+
+struct ExecutionResult {
+    new_wallets_count: i32,
+    initial_balance: U256,
+    final_balance: U256,
+    root_wallet: EthereumWallet,
+    time_elapsed: Duration,
 }
 
 /// an operation is an amount of funds to send to a wallet, from another wallet.
@@ -34,6 +48,18 @@ struct Operation {
     amount: Option<U256>,
 }
 
+impl Display for Operation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Transfer {:?} ETH from {} to {}",
+            self.amount,
+            self.from.default_signer().address(),
+            self.to.default_signer().address()
+        )
+    }
+}
+
 impl WalletManager {
     async fn new(id: usize, provider: Arc<dyn Provider<Ethereum>>) -> Result<Self> {
         let log_file = PathBuf::from(format!("wallet_manager_{}.log", id));
@@ -42,8 +68,6 @@ impl WalletManager {
             id,
             provider: provider.clone(),
             operations: None,
-            start_time: tokio::time::Instant::now(),
-            activated_wallets: Arc::new(Mutex::new(0)),
             log_file,
         })
     }
@@ -54,18 +78,59 @@ impl WalletManager {
         Ok(())
     }
 
-    async fn sequential_execute_operations(self) -> Result<()> {
-        // flatten the operations tree, and execute each operation in order
+    async fn sequential_execute_operations(&mut self) -> Result<ExecutionResult> {
+        let start_time = tokio::time::Instant::now();
+
         let operations = self.operations.as_ref().unwrap();
-        let operations = operations.lock().unwrap();
-        let mut operations_list = vec![];
-        for operation in operations.children.iter() {
-            operations_list.push(operation.lock().unwrap().value.clone());
-        }
+        let operations_list = {
+            let operations = operations.lock().unwrap();
+            operations.flatten()
+        }; // MutexGuard is dropped here
+
+        let root_wallet = operations_list.first().unwrap().from.clone();
+        assert!(
+            root_wallet.default_signer().address()
+                == operations_list
+                    .last()
+                    .unwrap()
+                    .to
+                    .default_signer()
+                    .address(),
+            "Root wallet address does not match last operation's to address"
+        );
+
+        let initial_balance = self
+            .provider
+            .get_balance(root_wallet.default_signer().address())
+            .await?;
+        let mut new_wallets = HashSet::new();
+
         for operation in operations_list {
+            self.log(&format!("Executing operation: {}", operation))?;
+            if self
+                .provider
+                .get_transaction_count(operation.from.default_signer().address())
+                .await?
+                == 0
+            {
+                new_wallets.insert(operation.from.default_signer().address());
+            }
             self.build_and_send_operation(operation).await?;
         }
-        Ok(())
+
+        let new_wallets_count = new_wallets.len() as i32;
+        let final_balance = self
+            .provider
+            .get_balance(root_wallet.default_signer().address())
+            .await?;
+
+        Ok(ExecutionResult {
+            new_wallets_count,
+            initial_balance,
+            final_balance,
+            root_wallet,
+            time_elapsed: start_time.elapsed(),
+        })
     }
 
     fn log(&self, message: &str) -> Result<()> {
@@ -153,24 +218,21 @@ impl WalletManager {
         Ok(())
     }
 
-    async fn print_statistics(
-        &self,
-        address_count: i32,
-        initial_balance: U256,
-        final_balance: U256,
-        root_wallet: EthereumWallet,
-    ) -> Result<()> {
-        let total_duration = self.start_time.elapsed();
-        let eth_spent = initial_balance - final_balance;
+    async fn print_statistics(&self, execution_result: ExecutionResult) -> Result<()> {
+        let total_duration = execution_result.time_elapsed;
+        let eth_spent = execution_result.initial_balance - execution_result.final_balance;
         let eth_price = get_eth_price().await?;
 
         self.log("\n========================================\nActivation Complete!\n========================================\n")?;
 
         self.log(&format!("Total Time Elapsed: {:?}", total_duration))?;
-        self.log(&format!("Total Addresses Activated: {}", address_count))?;
+        self.log(&format!(
+            "Total Addresses Activated: {}",
+            execution_result.new_wallets_count
+        ))?;
         self.log(&format!(
             "Average Time Per Address: {:?}",
-            total_duration / address_count as u32
+            total_duration / execution_result.new_wallets_count as u32
         ))?;
         self.log(&format!(
             "Total ETH Cost: {}",
@@ -178,7 +240,10 @@ impl WalletManager {
         ))?;
         self.log(&format!(
             "Average ETH Cost Per Address: {}",
-            format_units(eth_spent.to::<i128>() / address_count as i128, "ether")?
+            format_units(
+                eth_spent.to::<i128>() / execution_result.new_wallets_count as i128,
+                "ether"
+            )?
         ))?;
         self.log(&format!(
             "Total USD Cost: {}",
@@ -187,12 +252,12 @@ impl WalletManager {
         self.log(&format!(
             "Average USD Cost Per Address: {}",
             format_units(eth_spent.to::<i128>(), "ether")?.parse::<f64>()? * eth_price
-                / address_count as f64
+                / execution_result.new_wallets_count as f64
         ))?;
         self.log(&format!(
             "Final Balance: {} has been sent back to the original wallet: {}",
-            format_units(final_balance, "ether")?,
-            root_wallet.default_signer().address()
+            format_units(execution_result.final_balance, "ether")?,
+            execution_result.root_wallet.default_signer().address()
         ))?;
         Ok(())
     }
@@ -227,7 +292,9 @@ async fn main() -> eyre::Result<()> {
     let operations_tree = generate_operation_loop(root_wallet, to_activate).await?;
     wallet_manager.operations = Some(operations_tree);
 
-    wallet_manager.sequential_execute_operations().await?;
+    let execution_result = wallet_manager.sequential_execute_operations().await?;
+
+    wallet_manager.print_statistics(execution_result).await?;
 
     Ok(())
 }
@@ -237,20 +304,28 @@ async fn generate_operation_loop(
     total_new_wallets: i32,
 ) -> Result<Arc<Mutex<TreeNode<Operation>>>> {
     let mut operations = vec![];
+    // Create a chain of operations where each operation is a child of the previous one, each operation sends all ETH to the next wallet
+    let mut current_wallet = first_wallet.clone();
     for _ in 0..total_new_wallets {
-        let wallet = generate_wallet().await?;
+        let next_wallet = generate_wallet().await?;
         let operation = Operation {
-            from: first_wallet.clone(),
-            to: wallet,
+            from: current_wallet,
+            to: next_wallet.clone(),
             amount: None,
         };
         operations.push(operation);
+        current_wallet = next_wallet;
     }
     operations.push(Operation {
         from: operations.last().unwrap().to.clone(),
         to: first_wallet.clone(),
         amount: None,
     });
+
+    println!("Operations:");
+    for (i, op) in operations.iter().enumerate() {
+        println!("  {}: {}", i + 1, op);
+    }
 
     // Create the root node with the first operation
     let root = TreeNode::new(operations[0].clone());
@@ -263,13 +338,11 @@ async fn generate_operation_loop(
         current = new_node;
     }
 
-    println!("Root: {:?}", root);
-
     Ok(root)
 }
 
 async fn generate_wallet() -> Result<EthereumWallet> {
-    let signer = LocalSigner::new(rand::thread_rng());
+    let signer = PrivateKeySigner::random();
     let wallet = EthereumWallet::new(signer);
     Ok(wallet)
 }
@@ -288,7 +361,7 @@ struct TreeNode<T> {
     children: Vec<Arc<Mutex<TreeNode<T>>>>,
 }
 
-impl<T> TreeNode<T> {
+impl<T: Clone + Debug> TreeNode<T> {
     fn new(value: T) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(TreeNode {
             value,
@@ -298,5 +371,16 @@ impl<T> TreeNode<T> {
 
     fn add_child(parent: Arc<Mutex<Self>>, child: Arc<Mutex<TreeNode<T>>>) {
         parent.lock().unwrap().children.push(child);
+    }
+
+    /// Flattens the tree so that any parent operation is executed before any of it's children.
+    fn flatten(&self) -> Vec<T> {
+        let mut operations_list = vec![];
+        operations_list.push(self.value.clone());
+        for child in self.children.iter() {
+            // operations_list.push(child.lock().unwrap().value.clone());
+            operations_list.extend(child.lock().unwrap().flatten());
+        }
+        operations_list
     }
 }
