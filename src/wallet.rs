@@ -46,12 +46,21 @@ impl WalletManager {
         let operations = self.operations.as_ref().ok_or_else(|| {
             WalletError::WalletOperationError("No operations configured".to_string())
         })?;
-        let operations_list = {
+        let mut operations_list = {
             let operations = operations.lock().map_err(|_| {
                 WalletError::WalletOperationError("Failed to lock operations mutex".to_string())
             })?;
             operations.flatten()
         };
+        // remove operations that are redundant
+        operations_list.retain(|operation| {
+            operation.from.default_signer().address()
+                != operation.to.default_signer().address()
+        });
+        // remove operations with Some(0) amount, but not None
+        operations_list.retain(|operation| {
+            operation.amount.unwrap_or(U256::from(1)) != U256::from(0)
+        });
 
         let root_wallet = operations_list
             .first()

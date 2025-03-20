@@ -1,5 +1,6 @@
 use alloy::network::EthereumWallet;
 use alloy_primitives::U256;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::tree::TreeNode;
@@ -13,12 +14,13 @@ pub async fn generate_operation_loop(
     first_wallet: EthereumWallet,
     total_new_wallets: i32,
     return_wallet: Option<EthereumWallet>,
+    backup_dir: &Path,
 ) -> eyre::Result<Arc<std::sync::Mutex<TreeNode<Operation>>>> {
     let mut operations = vec![];
     let mut current_wallet = first_wallet.clone();
 
     for _ in 0..total_new_wallets {
-        let next_wallet = generate_wallet().await?;
+        let next_wallet = generate_wallet(backup_dir).await?;
         let operation = Operation {
             from: current_wallet,
             to: next_wallet.clone(),
@@ -33,11 +35,6 @@ pub async fn generate_operation_loop(
         to: return_wallet.unwrap_or(first_wallet),
         amount: None,
     });
-
-    println!("Operations:");
-    for (i, op) in operations.iter().enumerate() {
-        println!("  {}: {}", i + 1, op);
-    }
 
     // Create the root node with the first operation
     let root = TreeNode::new(operations[0].clone());
@@ -68,6 +65,7 @@ pub async fn generate_split_loops(
     total_new_wallets: i32,
     total_loops: i32,
     amount_per_wallet: U256,
+    backup_dir: &Path,
 ) -> eyre::Result<Arc<std::sync::Mutex<TreeNode<Operation>>>> {
     // Calculate how many wallets per loop
     let wallets_per_loop = total_new_wallets / total_loops;
@@ -85,7 +83,7 @@ pub async fn generate_split_loops(
     // Create first layer operations (one for each loop)
     for _ in 0..total_loops {
         // Generate a new wallet for this loop
-        let new_wallet = generate_wallet().await?;
+        let new_wallet = generate_wallet(backup_dir).await?;
 
         // Create the first operation to fund this wallet
         let first_op = Operation {
@@ -99,7 +97,7 @@ pub async fn generate_split_loops(
         TreeNode::add_child(root.clone(), first_op_node.clone());
 
         // Generate a loop starting from this new wallet
-        let loop_root = generate_operation_loop(new_wallet, wallets_per_loop, Some(first_wallet.clone())).await?;
+        let loop_root = generate_operation_loop(new_wallet, wallets_per_loop, Some(first_wallet.clone()), backup_dir).await?;
 
         // Add the loop as a child of the first operation
         TreeNode::add_child(first_op_node, loop_root);

@@ -5,6 +5,8 @@
 //! - Wallet generation
 //! - Price fetching
 
+use std::path::Path;
+
 use crate::{
     error::{Result, WalletError},
     Operation, TreeNode,
@@ -37,8 +39,14 @@ pub fn get_gas_buffer_multiplier() -> Result<u64> {
 ///
 /// # Returns
 /// * `Result<EthereumWallet>` - A new wallet instance or an error if generation fails
-pub async fn generate_wallet() -> Result<EthereumWallet> {
+pub async fn generate_wallet(backup_dir: &Path) -> Result<EthereumWallet> {
     let signer = PrivateKeySigner::random();
+
+    // backup private key to file
+    let backup_path = backup_dir.join(format!("wallet_{}.json", signer.address()));
+    std::fs::write(backup_path, signer.to_bytes().to_string())
+        .map_err(|e| WalletError::ProviderError(format!("Failed to backup private key: {}", e)))?;
+
     let wallet = EthereumWallet::new(signer);
     Ok(wallet)
 }

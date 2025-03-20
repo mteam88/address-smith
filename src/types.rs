@@ -4,6 +4,7 @@
 //! and their execution results.
 
 use alloy::{network::EthereumWallet, primitives::U256};
+use alloy_primitives::utils::format_units;
 use core::fmt;
 use std::fmt::{Debug, Display};
 use tokio::time::Duration;
@@ -22,13 +23,29 @@ pub struct Operation {
 
 impl Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "Transfer {:?} ETH from {} to {}",
-            self.amount,
-            self.from.default_signer().address(),
-            self.to.default_signer().address()
-        )
+        if self.from.default_signer().address() != self.to.default_signer().address() {
+            if let Some(amount) = self.amount {
+                writeln!(
+                    f,
+                    "Transfer {} ETH from {} to {}",
+                    format_units(amount, "ether").unwrap(),
+                    self.from.default_signer().address(),
+                    self.to.default_signer().address()
+            )
+            } else {
+                writeln!(
+                    f,
+                    "Transfer all available funds from {} to {}",
+                    self.from.default_signer().address(),
+                    self.to.default_signer().address()
+                )
+            }
+        } else {
+            writeln!(
+                f,
+                "NOOP"
+            )
+        }
     }
 }
 
