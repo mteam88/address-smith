@@ -61,18 +61,18 @@ impl WalletManager {
             .from
             .clone();
 
-        if root_wallet.default_signer().address()
-            != operations_list
-                .last()
-                .unwrap()
-                .to
-                .default_signer()
-                .address()
-        {
-            return Err(WalletError::WalletOperationError(
-                "Root wallet address does not match last operation's to address".to_string(),
-            ));
-        }
+        // if root_wallet.default_signer().address()
+        //     != operations_list
+        //         .last()
+        //         .unwrap()
+        //         .to
+        //         .default_signer()
+        //         .address()
+        // {
+        //     return Err(WalletError::WalletOperationError(
+        //         "Root wallet address does not match last operation's to address".to_string(),
+        //     ));
+        // }
 
         let initial_balance = self
             .provider

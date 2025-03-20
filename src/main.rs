@@ -3,11 +3,12 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
 };
+use alloy_primitives::utils::parse_units;
 use dotenv::dotenv;
 use log::info;
 use std::sync::Arc;
 
-use active_address::{operations::generate_operation_loop, wallet::WalletManager};
+use active_address::{operations::{generate_operation_loop, generate_split_loops}, wallet::WalletManager, utils::pretty_print_tree};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -35,7 +36,8 @@ async fn main() -> eyre::Result<()> {
 
     let mut wallet_manager = WalletManager::new(0, provider).await?;
 
-    let operations_tree = generate_operation_loop(root_wallet, to_activate).await?;
+    let operations_tree = generate_split_loops(root_wallet, to_activate, 2, parse_units("1", "ether").unwrap().into()).await?;
+    pretty_print_tree(&operations_tree.lock().unwrap());
     wallet_manager.operations = Some(operations_tree);
 
     let execution_result = wallet_manager.sequential_execute_operations().await?;

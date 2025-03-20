@@ -5,7 +5,10 @@
 //! - Wallet generation
 //! - Price fetching
 
-use crate::error::{Result, WalletError};
+use crate::{
+    error::{Result, WalletError},
+    Operation, TreeNode,
+};
 use alloy::{network::EthereumWallet, signers::local::PrivateKeySigner};
 use dotenv::dotenv;
 
@@ -62,4 +65,22 @@ pub async fn get_eth_price() -> Result<f64> {
         .ok_or_else(|| WalletError::ProviderError("Missing price data in response".to_string()))?
         .parse::<f64>()
         .map_err(|e| WalletError::ProviderError(format!("Failed to parse price value: {}", e)))
+}
+
+/// Pretty prints a tree of operations, showing the hierarchy with indentation.
+/// Each operation shows the transfer details between wallets.
+///
+/// # Arguments
+/// * `tree` - The root node of the operation tree to print
+pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
+    fn print_node(node: &TreeNode<Operation>, depth: usize) {
+        let indent = " | ".repeat(depth);
+        println!("{}Operation: {}", indent, node.value);
+        for child in &node.children {
+            if let Ok(child) = child.lock() {
+                print_node(&child, depth + 1);
+            }
+        }
+    }
+    print_node(tree, 0);
 }
