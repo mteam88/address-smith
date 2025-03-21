@@ -171,7 +171,7 @@ impl WalletManager {
         let root_node = self.operations.as_ref().unwrap();
 
         // Count total operations for progress tracking
-        let total_operations = self.count_total_operations(root_node);
+        let total_operations = Self::count_total_operations(root_node);
         *self.progress.write().await = ProgressStats::new(total_operations);
 
         let root_wallet = root_node.value.from.clone();
@@ -240,10 +240,10 @@ impl WalletManager {
     }
 
     /// Counts total number of operations in the tree
-    fn count_total_operations(&self, node: &TreeNode<Operation>) -> usize {
+    fn count_total_operations(node: &TreeNode<Operation>) -> usize {
         let mut count = 1; // Count current node
         for child in &node.children {
-            count += self.count_total_operations(child);
+            count += Self::count_total_operations(child);
         }
         count
     }
