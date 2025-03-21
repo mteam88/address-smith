@@ -82,6 +82,7 @@ pub async fn generate_split_loops(
     });
 
     // Create first layer operations (one for each loop)
+    let mut last_op_node = &mut root;
     for _ in 0..total_loops {
         // Generate a new wallet for this loop
         let new_wallet = generate_wallet(backup_dir).await?;
@@ -94,14 +95,15 @@ pub async fn generate_split_loops(
         };
 
         // Create a node for this operation
-        let mut first_op_node = TreeNode::new(first_op);
-        TreeNode::add_child(&mut root, &first_op_node);
+        let first_op_node = TreeNode::new(first_op);
+        TreeNode::add_child(last_op_node, &first_op_node);
+        last_op_node = last_op_node.children.last_mut().unwrap();
 
         // Generate a loop starting from this new wallet
         let loop_root = generate_operation_loop(new_wallet, wallets_per_loop, Some(first_wallet.clone()), backup_dir).await?;
 
         // Add the loop as a child of the first operation
-        TreeNode::add_child(&mut first_op_node, &loop_root);
+        TreeNode::add_child(last_op_node, &loop_root);
     }
 
     Ok(root)
