@@ -36,10 +36,10 @@ pub async fn generate_operation_loop(
     });
     // Create the root node with the first operation
     let mut root = TreeNode::new(operations[0].clone());
-    
+
     // Keep track of the current parent node as we build the chain
     let mut current_parent = &mut root;
-    
+
     // Add each subsequent operation as a child of the previous operation
     for operation in operations.into_iter().skip(1) {
         let new_node = TreeNode::new(operation);
@@ -100,7 +100,13 @@ pub async fn generate_split_loops(
         last_op_node = last_op_node.children.last_mut().unwrap();
 
         // Generate a loop starting from this new wallet
-        let loop_root = generate_operation_loop(new_wallet, wallets_per_loop, Some(first_wallet.clone()), backup_dir).await?;
+        let loop_root = generate_operation_loop(
+            new_wallet,
+            wallets_per_loop,
+            Some(first_wallet.clone()),
+            backup_dir,
+        )
+        .await?;
 
         // Add the loop as a child of the first operation
         TreeNode::add_child(last_op_node, &loop_root);

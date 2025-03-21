@@ -85,7 +85,7 @@ pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
         let indent = " | ".repeat(depth);
         println!("{}Operation: {}", indent, node.value);
         for child in &node.children {
-            print_node(&child, depth + 1);
+            print_node(child, depth + 1);
         }
     }
     print_node(tree, 0);
