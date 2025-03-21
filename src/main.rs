@@ -6,7 +6,7 @@ use alloy::{
 use alloy_primitives::utils::parse_units;
 use dotenv::dotenv;
 use log::info;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use active_address::{
     operations::generate_split_loops, utils::pretty_print_tree, wallet::WalletManager,
@@ -22,6 +22,7 @@ async fn main() -> eyre::Result<()> {
             .connect(&dotenv::var("RPC_URL").unwrap())
             .await?,
     );
+    provider.client().set_poll_interval(Duration::from_secs(4));
     info!("Provider Chain ID: {}", provider.get_chain_id().await?);
 
     let private_key: String = dotenv::var("PRIVATE_KEY")

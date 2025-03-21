@@ -206,6 +206,10 @@ impl WalletManager {
             new_wallets.insert(operation.from.default_signer().address());
         }
 
+        if operation.from.default_signer().address() == operation.to.default_signer().address() {
+            return Ok(());
+        }
+
         self.build_and_send_operation(operation).await
     }
 
