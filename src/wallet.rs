@@ -271,35 +271,13 @@ impl WalletManager {
         Ok(balance - gas_buffer.mul(gas))
     }
 
-    /// Sends a transaction with retry logic
+    /// Sends a transaction without retry logic
     async fn send_transaction(&self, tx: TransactionRequest, wallet: EthereumWallet) -> Result<()> {
-        let mut retry_count = 0;
-        let max_retries = self.config.max_retries;
-        let base_delay = Duration::from_millis(self.config.retry_base_delay_ms);
-
         // slight random delay to avoid hitting rate limits
         let random_delay = Duration::from_millis(rand::random_range(0..2000));
         tokio::time::sleep(random_delay).await;
 
-        loop {
-            match self.attempt_transaction(&tx, &wallet).await {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    if retry_count >= max_retries {
-                        return Err(e);
-                    }
-                    retry_count += 1;
-                    let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
-
-                    warn!(
-                        "Transaction failed (attempt {}/{}), retrying in {:?}: {}",
-                        retry_count, max_retries, delay, e
-                    );
-
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
+        self.attempt_transaction(&tx, &wallet).await
     }
 
     /// Attempts to send a single transaction
@@ -352,17 +330,40 @@ impl WalletManager {
         Ok(())
     }
 
-    /// Builds and sends an operation with retry logic
+    /// Builds and sends an operation with retry logic, rebuilding transaction on each attempt
     async fn build_and_send_operation(&self, operation: &Operation) -> Result<()> {
-        let tx = self
-            .build_transaction(
-                operation.from.clone(),
-                operation.to.default_signer().address(),
-                operation.amount,
-            )
-            .await?;
+        let mut retry_count = 0;
+        let max_retries = self.config.max_retries;
+        let base_delay = Duration::from_millis(self.config.retry_base_delay_ms);
 
-        self.send_transaction(tx, operation.from.clone()).await
+        loop {
+            // Rebuild transaction from scratch on each attempt
+            let tx = self
+                .build_transaction(
+                    operation.from.clone(),
+                    operation.to.default_signer().address(),
+                    operation.amount,
+                )
+                .await?;
+
+            match self.send_transaction(tx, operation.from.clone()).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if retry_count >= max_retries {
+                        return Err(e);
+                    }
+                    retry_count += 1;
+                    let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
+
+                    warn!(
+                        "Transaction failed (attempt {}/{}), rebuilding and retrying in {:?}: {}",
+                        retry_count, max_retries, delay, e
+                    );
+
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
     }
 
     /// Prints execution statistics including time, addresses activated, and costs
