@@ -1,9 +1,11 @@
-use std::{collections::HashSet, ops::Mul, sync::Arc, time::Duration};
+use std::{collections::HashSet, io::Write, ops::Mul, sync::Arc, time::Duration};
 
 use crate::{
     error::{Result, WalletError},
     tree::TreeNode,
-    types::{ExecutionResult, FailureImpact, NodeError, NodeExecutionResult, Operation},
+    types::{
+        ExecutionResult, FailureImpact, NodeError, NodeExecutionResult, Operation, ProgressStats,
+    },
     utils::{get_eth_price, GAS_LIMIT},
 };
 use alloy::{
@@ -15,6 +17,7 @@ use alloy::{
 use alloy_primitives::utils::parse_units;
 use futures::future;
 use log::{info, warn};
+use tokio::sync::RwLock;
 
 /// Configuration for wallet operations loaded from environment variables
 #[derive(Debug, Clone)]
@@ -67,6 +70,8 @@ pub struct WalletManager {
     /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
     pub operations: Option<TreeNode<Operation>>,
     config: Config,
+    /// Progress statistics for the current execution
+    progress: Arc<RwLock<ProgressStats>>,
 }
 
 impl WalletManager {
@@ -84,7 +89,79 @@ impl WalletManager {
             provider: provider.clone(),
             operations: None,
             config,
+            progress: Arc::new(RwLock::new(ProgressStats::new(0))), // Will be initialized in parallel_execute_operations
         })
+    }
+
+    /// Updates progress statistics and prints current status
+    async fn update_progress(&self, success: bool) {
+        let mut progress = self.progress.write().await;
+        progress.completed_operations += 1;
+        if success {
+            progress.successful_operations += 1;
+        }
+
+        // Update gas price
+        if let Ok(gas_price) = self.provider.get_gas_price().await {
+            progress.current_gas_price = U256::from(gas_price);
+        }
+
+        // Calculate statistics
+        let success_rate = progress.success_rate();
+        let progress_percent =
+            (progress.completed_operations as f64 / progress.total_operations as f64) * 100.0;
+        let ops_per_minute = progress.operations_per_minute();
+
+        let time_remaining = progress
+            .estimated_time_remaining()
+            .map(|d| format!("{:.1} minutes", d.as_secs_f64() / 60.0))
+            .unwrap_or_else(|| "calculating...".to_string());
+
+        let gas_price_gwei =
+            format_units(progress.current_gas_price, "gwei").unwrap_or_else(|_| "N/A".to_string());
+
+        // Format all lines first to determine maximum width
+        let lines = vec![
+            format!(
+                "Progress: {:.1}% ({}/{})",
+                progress_percent, progress.completed_operations, progress.total_operations
+            ),
+            format!("Success Rate: {:.1}%", success_rate),
+            format!("Gas Price: {} gwei", gas_price_gwei),
+            format!("Operations/min: {:.1}", ops_per_minute),
+            format!("Time Remaining: {}", time_remaining),
+        ];
+
+        // Calculate required width (add 6 for margins: 2 for borders + 2 spaces on each side)
+        let max_width = lines.iter().map(|line| line.len()).max().unwrap_or(0) + 6;
+
+        let title = "Operation Progress";
+        let title_total_padding = max_width - 2 - title.len(); // -2 for the border characters
+        let title_left_padding = title_total_padding / 2;
+        let title_right_padding = title_total_padding - title_left_padding;
+        let border_line = "═".repeat(max_width - 2);
+
+        // Clear screen and print box
+        print!("\x1B[2J\x1B[1;1H"); // Clear screen and move cursor to top
+        println!("╔{}╗", border_line);
+        println!(
+            "║{}{}{}║",
+            " ".repeat(title_left_padding),
+            title,
+            " ".repeat(title_right_padding)
+        );
+        println!("╠{}╣", border_line);
+
+        // Print each line with proper padding
+        for line in lines {
+            let padding = max_width - line.len() - 4; // -4 for borders and minimum spaces
+            println!("║  {}{}║", line, " ".repeat(padding));
+        }
+
+        println!("╚{}╝", border_line);
+
+        // Ensure output is flushed
+        std::io::stdout().flush().unwrap_or_default();
     }
 
     /// Executes operations in parallel, ensuring parent operations complete before children
@@ -92,13 +169,17 @@ impl WalletManager {
         let start_time = tokio::time::Instant::now();
 
         let root_node = self.operations.as_ref().unwrap();
+
+        // Count total operations for progress tracking
+        let total_operations = self.count_total_operations(root_node);
+        *self.progress.write().await = ProgressStats::new(total_operations);
+
         let root_wallet = root_node.value.from.clone();
         let initial_balance = self.get_wallet_balance(&root_wallet).await?;
         let mut new_wallets = HashSet::new();
         let mut errors = Vec::new();
 
         // If the root node has multiple children, execute them in parallel
-        // This is especially beneficial for the split_loops pattern where multiple loops run in parallel
         if !root_node.children.is_empty() {
             // Execute root operation first
             self.log(&format!("Executing root operation: {}", root_node.value));
@@ -110,6 +191,9 @@ impl WalletManager {
                     node_id: root_node.id,
                     error: e,
                 });
+                self.update_progress(false).await;
+            } else {
+                self.update_progress(true).await;
             }
 
             // Now execute all children in parallel
@@ -130,16 +214,14 @@ impl WalletManager {
                         errors.extend(node_result.errors);
                     }
                     Err(e) => {
-                        // This should never happen as execute_node now returns NodeExecutionResult
                         errors.push(NodeError {
-                            node_id: 0, // Unknown node ID in this case
+                            node_id: 0,
                             error: e,
                         });
                     }
                 }
             }
         } else {
-            // If there's only a simple chain, just execute from the root
             let node_result = self.execute_node(root_node.clone()).await?;
             new_wallets.extend(node_result.new_wallets);
             errors.extend(node_result.errors);
@@ -155,6 +237,15 @@ impl WalletManager {
             time_elapsed: start_time.elapsed(),
             errors,
         })
+    }
+
+    /// Counts total number of operations in the tree
+    fn count_total_operations(&self, node: &TreeNode<Operation>) -> usize {
+        let mut count = 1; // Count current node
+        for child in &node.children {
+            count += self.count_total_operations(child);
+        }
+        count
     }
 
     async fn execute_node(&self, node: TreeNode<Operation>) -> Result<NodeExecutionResult> {
@@ -240,10 +331,13 @@ impl WalletManager {
         }
 
         if operation.from.default_signer().address() == operation.to.default_signer().address() {
+            self.update_progress(true).await;
             return Ok(());
         }
 
-        self.build_and_send_operation(operation).await
+        let result = self.build_and_send_operation(operation).await;
+        self.update_progress(result.is_ok()).await;
+        result
     }
 
     /// Logs a message

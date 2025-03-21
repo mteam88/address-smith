@@ -115,3 +115,73 @@ impl Display for FailureImpact {
         Ok(())
     }
 }
+
+/// Tracks progress statistics during execution
+#[derive(Debug, Clone)]
+pub struct ProgressStats {
+    /// Total number of operations to execute
+    pub total_operations: usize,
+    /// Number of completed operations
+    pub completed_operations: usize,
+    /// Number of successful operations
+    pub successful_operations: usize,
+    /// Current gas price in gwei
+    pub current_gas_price: U256,
+    /// Start time of execution
+    pub start_time: std::time::Instant,
+    /// Timestamps of operations completed in the last minute
+    pub recent_operations: Vec<std::time::Instant>,
+}
+
+impl ProgressStats {
+    pub fn new(total_operations: usize) -> Self {
+        Self {
+            total_operations,
+            completed_operations: 0,
+            successful_operations: 0,
+            current_gas_price: U256::ZERO,
+            start_time: std::time::Instant::now(),
+            recent_operations: Vec::new(),
+        }
+    }
+
+    pub fn success_rate(&self) -> f64 {
+        if self.completed_operations == 0 {
+            100.0
+        } else {
+            (self.successful_operations as f64 / self.completed_operations as f64) * 100.0
+        }
+    }
+
+    pub fn operations_per_minute(&mut self) -> f64 {
+        let now = std::time::Instant::now();
+        let one_minute_ago = now - std::time::Duration::from_secs(60);
+
+        // Remove operations older than 1 minute
+        self.recent_operations.retain(|&time| time > one_minute_ago);
+
+        // Add current operation
+        self.recent_operations.push(now);
+
+        // Calculate ops per minute
+        if self.recent_operations.len() <= 1 {
+            0.0
+        } else {
+            let window_duration = now - self.recent_operations[0];
+            (self.recent_operations.len() as f64) / window_duration.as_secs_f64() * 60.0
+        }
+    }
+
+    pub fn estimated_time_remaining(&self) -> Option<std::time::Duration> {
+        if self.completed_operations == 0 {
+            return None;
+        }
+
+        let elapsed = self.start_time.elapsed();
+        let ops_per_second = self.completed_operations as f64 / elapsed.as_secs_f64();
+        let remaining_ops = self.total_operations - self.completed_operations;
+        let remaining_secs = remaining_ops as f64 / ops_per_second;
+
+        Some(std::time::Duration::from_secs_f64(remaining_secs))
+    }
+}
