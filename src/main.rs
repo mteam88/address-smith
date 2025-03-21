@@ -36,13 +36,25 @@ async fn main() -> eyre::Result<()> {
     let to_activate = dotenv::var("ADDRESS_COUNT").unwrap().parse::<i32>()?;
     assert!(to_activate > 0, "ADDRESS_COUNT must be greater than 0");
 
+    let split_loops_count = dotenv::var("SPLIT_LOOPS_COUNT")
+        .unwrap_or_else(|_| "2".to_string())
+        .parse()
+        .unwrap_or(2);
+
+    let amount_per_wallet = parse_units(
+        &dotenv::var("AMOUNT_PER_WALLET").unwrap_or_else(|_| "1".to_string()),
+        "ether",
+    )
+    .unwrap()
+    .into();
+
     let mut wallet_manager = WalletManager::new(0, provider).await?;
 
     let operations_tree = generate_split_loops(
         root_wallet,
         to_activate,
-        2,
-        parse_units("1", "ether").unwrap().into(),
+        split_loops_count,
+        amount_per_wallet,
         &PathBuf::from("wallets"),
     )
     .await?;
