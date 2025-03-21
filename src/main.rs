@@ -39,7 +39,7 @@ async fn main() -> eyre::Result<()> {
     // Create log file
     let log_file = OpenOptions::new()
         .create(true)
-        .write(true)
+        .append(true)
         .open(&log_file_name)?;
 
     builder.format(|buf, record| {
@@ -90,7 +90,7 @@ async fn main() -> eyre::Result<()> {
     .unwrap()
     .into();
 
-    let mut wallet_manager = WalletManager::new(0, provider).await?;
+    let mut wallet_manager = WalletManager::new(provider).await?;
 
     let operations_tree = generate_split_loops(
         root_wallet,

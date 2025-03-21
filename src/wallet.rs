@@ -63,7 +63,6 @@ impl Config {
 
 /// Manages wallet operations and transaction execution
 pub struct WalletManager {
-    id: usize,
     provider: Arc<dyn Provider<Ethereum>>,
     /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
     pub operations: Option<TreeNode<Operation>>,
@@ -74,16 +73,14 @@ impl WalletManager {
     /// Creates a new WalletManager instance
     ///
     /// # Arguments
-    /// * `id` - Unique identifier for this wallet manager
     /// * `provider` - Ethereum provider for blockchain interactions
     ///
     /// # Returns
     /// * `Result<Self>` - New WalletManager instance or error
-    pub async fn new(id: usize, provider: Arc<dyn Provider<Ethereum>>) -> Result<Self> {
+    pub async fn new(provider: Arc<dyn Provider<Ethereum>>) -> Result<Self> {
         let config = Config::from_env()?;
 
         Ok(Self {
-            id,
             provider: provider.clone(),
             operations: None,
             config,
@@ -249,9 +246,9 @@ impl WalletManager {
         self.build_and_send_operation(operation).await
     }
 
-    /// Logs a message with the manager's ID prefix
+    /// Logs a message
     fn log(&self, message: &str) {
-        info!("[Manager {}] {}", self.id, message);
+        info!("{}", message);
     }
 
     /// Builds a transaction request with current network parameters
