@@ -34,16 +34,18 @@ pub async fn generate_operation_loop(
         to: return_wallet.unwrap_or(first_wallet),
         amount: None,
     });
-
     // Create the root node with the first operation
-    let root = TreeNode::new(operations[0].clone());
-
-    // Create a chain of operations where each operation is a child of the previous one
-    let mut current = root.clone();
+    let mut root = TreeNode::new(operations[0].clone());
+    
+    // Keep track of the current parent node as we build the chain
+    let mut current_parent = &mut root;
+    
+    // Add each subsequent operation as a child of the previous operation
     for operation in operations.into_iter().skip(1) {
         let new_node = TreeNode::new(operation);
-        TreeNode::add_child(&mut current, &new_node);
-        current = new_node;
+        TreeNode::add_child(current_parent, &new_node);
+        // The new node becomes the parent for the next iteration
+        current_parent = current_parent.children.last_mut().unwrap();
     }
 
     Ok(root)
@@ -58,7 +60,7 @@ pub async fn generate_operation_loop(
 /// * `amount_per_wallet` - The amount of ether to send to each new first layer wallet
 ///
 /// # Returns
-/// * `Arc<std::sync::Mutex<TreeNode<Operation>>>` - The root node of the built tree
+/// * `TreeNode<Operation>` - The root node of the built tree
 pub async fn generate_split_loops(
     first_wallet: EthereumWallet,
     total_new_wallets: i32,
