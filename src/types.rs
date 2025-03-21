@@ -179,7 +179,7 @@ impl ProgressStats {
 
         let elapsed = self.start_time.elapsed();
         let ops_per_second = self.completed_operations as f64 / elapsed.as_secs_f64();
-        let remaining_ops = self.total_operations - self.completed_operations;
+        let remaining_ops = self.total_operations.saturating_sub(self.completed_operations);
         let remaining_secs = remaining_ops as f64 / ops_per_second;
 
         Some(std::time::Duration::from_secs_f64(remaining_secs))

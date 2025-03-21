@@ -386,6 +386,9 @@ impl WalletManager {
         let balance = self.get_wallet_balance(wallet).await?;
         let gas = gas_price * U256::from(GAS_LIMIT);
         let gas_buffer = U256::from(self.config.gas_buffer_multiplier);
+        if balance < gas_buffer.mul(gas) {
+            warn!("Insufficient balance for gas buffer: {} < {} for wallet: {}.", balance, gas_buffer.mul(gas), wallet.default_signer().address());
+        }
         Ok(balance - gas_buffer.mul(gas))
     }
 
@@ -407,7 +410,7 @@ impl WalletManager {
         self.log("Sending transaction...");
 
         let tx_envelope = tx.clone().build(wallet).await.map_err(|e| {
-            WalletError::TransactionError(format!("Failed to build transaction: {}", e))
+            WalletError::TransactionError(format!("Failed to build transaction: {}", e), None)
         })?;
 
         let start = tokio::time::Instant::now();
@@ -416,12 +419,12 @@ impl WalletManager {
             .send_tx_envelope(tx_envelope)
             .await
             .map_err(|e| {
-                WalletError::TransactionError(format!("Failed to send transaction: {}", e))
+                WalletError::TransactionError(format!("Failed to send transaction: {}", e), None)
             })?
             .get_receipt()
             .await
             .map_err(|e| {
-                WalletError::TransactionError(format!("Failed to get transaction receipt: {}", e))
+                WalletError::TransactionError(format!("Failed to get transaction receipt: {}", e), None)
             })?;
 
         let duration = start.elapsed();
@@ -442,7 +445,7 @@ impl WalletManager {
         self.log(&format!(
             "TX Value: {}",
             format_units(tx.value.unwrap(), "ether").map_err(|e| {
-                WalletError::TransactionError(format!("Failed to format transaction value: {}", e))
+                WalletError::TransactionError(format!("Failed to format transaction value: {}", e), None)
             })?
         ));
         Ok(())
@@ -467,6 +470,16 @@ impl WalletManager {
             match self.send_transaction(tx, operation.from.clone()).await {
                 Ok(_) => return Ok(()),
                 Err(e) => {
+                    // if e is transaction error, we must check if the transaction actually did land
+                    if let WalletError::TransactionError(_, Some(hash)) = e {
+                        let receipt = self.provider.get_transaction_receipt(hash).await;
+                        if let Ok(Some(receipt)) = receipt {
+                            if receipt.status() {
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     if retry_count >= max_retries {
                         return Err(e);
                     }
@@ -525,7 +538,7 @@ impl WalletManager {
             self.log(&format!(
                 "Total ETH Stuck: {} ETH (${:.2})",
                 format_units(total_eth_stuck, "ether").map_err(|e| {
-                    WalletError::TransactionError(format!("Failed to format ETH stuck: {}", e))
+                    WalletError::TransactionError(format!("Failed to format ETH stuck: {}", e), None)
                 })?,
                 eth_price
                     * format_units(total_eth_stuck, "ether")
@@ -533,7 +546,7 @@ impl WalletManager {
                             WalletError::TransactionError(format!(
                                 "Failed to format ETH stuck: {}",
                                 e
-                            ))
+                            ), None)
                         })?
                         .parse::<f64>()
                         .unwrap()
@@ -556,12 +569,12 @@ impl WalletManager {
         self.log(&format!(
             "Total ETH Spent: {} ETH (${:.2})",
             format_units(eth_spent, "ether").map_err(|e| {
-                WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
             })?,
             eth_price
                 * format_units(eth_spent, "ether")
                     .map_err(|e| {
-                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
                     })?
                     .parse::<f64>()
                     .unwrap()
@@ -570,7 +583,7 @@ impl WalletManager {
         let eth_per_wallet = parse_units(
             (format_units(eth_spent, "ether")
                 .map_err(|e| {
-                    WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                    WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
                 })?
                 .parse::<f64>()
                 .unwrap()
@@ -584,12 +597,12 @@ impl WalletManager {
         self.log(&format!(
             "Cost Per Wallet: {} ETH (${:.2})",
             format_units(eth_per_wallet, "ether").map_err(|e| {
-                WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
             })?,
             eth_price
                 * format_units(eth_per_wallet, "ether")
                     .map_err(|e| {
-                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
                     })?
                     .parse::<f64>()
                     .unwrap()

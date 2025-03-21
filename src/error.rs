@@ -3,6 +3,7 @@
 //! This module defines the custom error types used throughout the crate
 //! and provides a convenient Result type alias.
 
+use alloy_primitives::TxHash;
 use thiserror::Error;
 
 /// Errors that can occur during wallet operations.
@@ -17,8 +18,8 @@ pub enum WalletError {
     InvalidEnvVar(String),
 
     /// Error occurred during transaction execution
-    #[error("Transaction error: {0}")]
-    TransactionError(String),
+    #[error("Transaction error: {0} with hash: {1:?}")]
+    TransactionError(String, Option<TxHash>),
 
     /// Error communicating with the Ethereum provider
     #[error("Provider error: {0}")]
