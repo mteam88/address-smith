@@ -6,6 +6,7 @@ use alloy::{
     providers::Provider,
     rpc::types::TransactionRequest,
 };
+use alloy_primitives::utils::parse_units;
 use futures::future;
 use log::{info, warn};
 
@@ -381,6 +382,24 @@ impl WalletManager {
             })?,
             eth_price
                 * format_units(eth_spent, "ether")
+                    .map_err(|e| {
+                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+                    })?
+                    .parse::<f64>()
+                    .unwrap()
+        ))?;
+
+        let eth_per_wallet = parse_units((format_units(eth_spent, "ether").map_err(|e| {
+            WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+        })?.parse::<f64>().unwrap() / execution_result.new_wallets_count as f64).to_string().as_str(), "ether").unwrap();
+        // per wallet cost in eth and usd
+        self.log(&format!(
+            "Cost Per Wallet: {} ETH (${:.2})",
+            format_units(eth_per_wallet, "ether").map_err(|e| {
+                WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
+            })?,
+            eth_price
+                * format_units(eth_per_wallet, "ether")
                     .map_err(|e| {
                         WalletError::TransactionError(format!("Failed to format ETH spent: {}", e))
                     })?
