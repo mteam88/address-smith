@@ -1,5 +1,11 @@
 use std::{collections::HashSet, io::Write, ops::Mul, path::PathBuf, sync::Arc, time::Duration};
 
+use crate::{
+    error::{Result, WalletError},
+    tree::TreeNode,
+    types::{ExecutionResult, NodeExecutionResult, Operation},
+    utils::{get_eth_price, GAS_LIMIT},
+};
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{utils::format_units, U256},
@@ -9,13 +15,6 @@ use alloy::{
 use alloy_primitives::utils::parse_units;
 use futures::future;
 use log::{info, warn};
-
-use crate::{
-    error::{Result, WalletError},
-    tree::TreeNode,
-    types::{ExecutionResult, NodeExecutionResult, Operation},
-    utils::{get_eth_price, GAS_LIMIT},
-};
 
 /// Configuration for wallet operations loaded from environment variables
 #[derive(Debug, Clone)]
@@ -277,6 +276,10 @@ impl WalletManager {
         let mut retry_count = 0;
         let max_retries = self.config.max_retries;
         let base_delay = Duration::from_millis(self.config.retry_base_delay_ms);
+
+        // slight random delay to avoid hitting rate limits
+        let random_delay = Duration::from_millis(rand::random_range(0..2000));
+        tokio::time::sleep(random_delay).await;
 
         loop {
             match self.attempt_transaction(&tx, &wallet).await {
