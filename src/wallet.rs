@@ -99,32 +99,6 @@ impl WalletManager {
         })
     }
 
-    /// Executes operations sequentially, ensuring each operation completes before the next begins
-    pub async fn sequential_execute_operations(&mut self) -> Result<ExecutionResult> {
-        let start_time = tokio::time::Instant::now();
-        let operations_list = self.prepare_operations()?;
-
-        let root_wallet = self.get_root_wallet(&operations_list)?;
-        let initial_balance = self.get_wallet_balance(&root_wallet).await?;
-        let mut new_wallets = HashSet::new();
-
-        for operation in operations_list {
-            self.log(&format!("Executing operation: {}", operation))?;
-            self.process_single_operation(&operation, &mut new_wallets)
-                .await?;
-        }
-
-        let final_balance = self.get_wallet_balance(&root_wallet).await?;
-
-        Ok(ExecutionResult {
-            new_wallets_count: new_wallets.len() as i32,
-            initial_balance,
-            final_balance,
-            root_wallet,
-            time_elapsed: start_time.elapsed(),
-        })
-    }
-
     /// Executes operations in parallel, ensuring parent operations complete before children
     pub async fn parallel_execute_operations(&mut self) -> Result<ExecutionResult> {
         let start_time = tokio::time::Instant::now();
@@ -182,42 +156,6 @@ impl WalletManager {
         }
 
         Ok(NodeExecutionResult { new_wallets })
-    }
-
-    /// Prepares and validates the list of operations to be executed
-    /// Note: this function is used to flatten an operation tree into a list of operations and is therefore not compatible with parallel execution
-    fn prepare_operations(&self) -> Result<Vec<Operation>> {
-        let operations = self.operations.as_ref().ok_or_else(|| {
-            WalletError::WalletOperationError("No operations configured".to_string())
-        })?;
-
-        let mut operations_list = {
-            let operations = operations.lock().map_err(|_| {
-                WalletError::WalletOperationError("Failed to lock operations mutex".to_string())
-            })?;
-            operations.flatten()
-        };
-
-        // Remove redundant operations
-        operations_list.retain(|operation| {
-            operation.from.default_signer().address() != operation.to.default_signer().address()
-                && operation.amount.unwrap_or(U256::from(1)) != U256::from(0)
-        });
-
-        if operations_list.is_empty() {
-            return Err(WalletError::WalletOperationError(
-                "No valid operations to execute".to_string(),
-            ));
-        }
-
-        Ok(operations_list)
-    }
-
-    /// Gets the root wallet from the operations list
-    fn get_root_wallet(&self, operations: &[Operation]) -> Result<EthereumWallet> {
-        operations.first().map(|op| op.from.clone()).ok_or_else(|| {
-            WalletError::WalletOperationError("No operations to execute".to_string())
-        })
     }
 
     /// Gets the balance of a wallet

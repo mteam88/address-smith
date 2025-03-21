@@ -40,7 +40,7 @@ async fn main() -> eyre::Result<()> {
     pretty_print_tree(&operations_tree.lock().unwrap());
     wallet_manager.operations = Some(operations_tree);
 
-    let execution_result = wallet_manager.sequential_execute_operations().await?;
+    let execution_result = wallet_manager.parallel_execute_operations().await?;
 
     wallet_manager.print_statistics(execution_result).await?;
 
