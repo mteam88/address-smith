@@ -1,11 +1,4 @@
-use std::{
-    collections::HashSet,
-    io::Write,
-    ops::Mul,
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, io::Write, ops::Mul, path::PathBuf, sync::Arc, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder},
@@ -13,6 +6,7 @@ use alloy::{
     providers::Provider,
     rpc::types::TransactionRequest,
 };
+use futures::future;
 use log::{info, warn};
 
 use crate::{
@@ -103,22 +97,43 @@ impl WalletManager {
     pub async fn parallel_execute_operations(&mut self) -> Result<ExecutionResult> {
         let start_time = tokio::time::Instant::now();
 
-        let root_wallet = self
-            .operations
-            .as_ref()
-            .unwrap()
-            .value
-            .from
-            .clone();
+        let root_node = self.operations.as_ref().unwrap();
+        let root_wallet = root_node.value.from.clone();
         let initial_balance = self.get_wallet_balance(&root_wallet).await?;
         let mut new_wallets = HashSet::new();
 
-        let node_result = self
-            .execute_node(self.operations.as_ref().unwrap().clone())
-            .await?;
-        let final_balance = self.get_wallet_balance(&root_wallet).await?;
+        // If the root node has multiple children, execute them in parallel
+        // This is especially beneficial for the split_loops pattern where multiple loops run in parallel
+        if !root_node.children.is_empty() {
+            // Execute root operation first
+            self.log(&format!("Executing root operation: {}", root_node.value))?;
+            self.process_single_operation(&root_node.value, &mut new_wallets)
+                .await?;
 
-        new_wallets.extend(node_result.new_wallets);
+            // Now execute all children in parallel
+            let mut child_futures = Vec::with_capacity(root_node.children.len());
+
+            for child in root_node.children.clone() {
+                child_futures.push(self.execute_node(child));
+            }
+
+            // Wait for all child operations to complete
+            let results = future::join_all(child_futures).await;
+
+            // Process results
+            for result in results {
+                match result {
+                    Ok(node_result) => new_wallets.extend(node_result.new_wallets),
+                    Err(e) => return Err(e),
+                }
+            }
+        } else {
+            // If there's only a simple chain, just execute from the root
+            let node_result = self.execute_node(root_node.clone()).await?;
+            new_wallets.extend(node_result.new_wallets);
+        }
+
+        let final_balance = self.get_wallet_balance(&root_wallet).await?;
 
         Ok(ExecutionResult {
             new_wallets_count: new_wallets.len() as i32,
@@ -129,26 +144,36 @@ impl WalletManager {
         })
     }
 
-    async fn execute_node(
-        &self,
-        node: TreeNode<Operation>,
-    ) -> Result<NodeExecutionResult> {
-        // execute operation
-        let operation = {
-            node.value.clone()
-        };
+    async fn execute_node(&self, node: TreeNode<Operation>) -> Result<NodeExecutionResult> {
+        // Execute operation
+        let operation = node.value.clone();
         let mut new_wallets = HashSet::new();
         self.log(&format!("Executing operation: {}", operation))?;
         self.process_single_operation(&operation, &mut new_wallets)
             .await?;
 
-        // spawn new threads to execute children
-        let children = {
-            node.children.clone()
-        };
-        for child in &children {
-            let child_result = Box::pin(self.execute_node(child.clone())).await?;
-            new_wallets.extend(child_result.new_wallets);
+        // Now that parent operation is complete, handle children
+        let children = node.children.clone();
+
+        if !children.is_empty() {
+            // Create a vector to store the futures
+            let mut child_futures = Vec::with_capacity(children.len());
+
+            // Create futures for all child operations without spawning new tasks
+            for child in children {
+                child_futures.push(self.execute_node(child));
+            }
+
+            // Execute all child operations concurrently and collect results
+            let results = future::join_all(child_futures).await;
+
+            // Process the results
+            for result in results {
+                match result {
+                    Ok(child_result) => new_wallets.extend(child_result.new_wallets),
+                    Err(e) => return Err(e),
+                }
+            }
         }
 
         Ok(NodeExecutionResult { new_wallets })
