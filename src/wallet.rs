@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io::Write, ops::Mul, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashSet, ops::Mul, sync::Arc, time::Duration};
 
 use crate::{
     error::{Result, WalletError},
@@ -67,7 +67,6 @@ pub struct WalletManager {
     provider: Arc<dyn Provider<Ethereum>>,
     /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
     pub operations: Option<TreeNode<Operation>>,
-    log_file: PathBuf,
     config: Config,
 }
 
@@ -81,14 +80,12 @@ impl WalletManager {
     /// # Returns
     /// * `Result<Self>` - New WalletManager instance or error
     pub async fn new(id: usize, provider: Arc<dyn Provider<Ethereum>>) -> Result<Self> {
-        let log_file = PathBuf::from(format!("wallet_manager_{}.log", id));
         let config = Config::from_env()?;
 
         Ok(Self {
             id,
             provider: provider.clone(),
             operations: None,
-            log_file,
             config,
         })
     }
@@ -107,7 +104,7 @@ impl WalletManager {
         // This is especially beneficial for the split_loops pattern where multiple loops run in parallel
         if !root_node.children.is_empty() {
             // Execute root operation first
-            self.log(&format!("Executing root operation: {}", root_node.value))?;
+            self.log(&format!("Executing root operation: {}", root_node.value));
             if let Err(e) = self
                 .process_single_operation(&root_node.value, &mut new_wallets)
                 .await
@@ -169,7 +166,7 @@ impl WalletManager {
 
         // Execute operation
         let operation = node.value.clone();
-        self.log(&format!("Executing operation: {}", operation))?;
+        self.log(&format!("Executing operation: {}", operation));
         if let Err(e) = self
             .process_single_operation(&operation, &mut new_wallets)
             .await
@@ -252,19 +249,9 @@ impl WalletManager {
         self.build_and_send_operation(operation).await
     }
 
-    /// Logs a message to both file and console
-    fn log(&self, message: &str) -> Result<()> {
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        let log_message = format!("[{}] {}\n", timestamp, message);
-
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_file)?;
-
-        file.write_all(log_message.as_bytes())?;
+    /// Logs a message with the manager's ID prefix
+    fn log(&self, message: &str) {
         info!("[Manager {}] {}", self.id, message);
-        Ok(())
     }
 
     /// Builds a transaction request with current network parameters
@@ -326,7 +313,7 @@ impl WalletManager {
         tx: &TransactionRequest,
         wallet: &EthereumWallet,
     ) -> Result<()> {
-        self.log("Sending transaction...")?;
+        self.log("Sending transaction...");
 
         let tx_envelope = tx.clone().build(wallet).await.map_err(|e| {
             WalletError::TransactionError(format!("Failed to build transaction: {}", e))
@@ -359,14 +346,14 @@ impl WalletManager {
         hash: alloy::primitives::TxHash,
         duration: Duration,
     ) -> Result<()> {
-        self.log(&format!("Transaction Landed! Time elapsed: {:?}", duration))?;
-        self.log(&format!("TX Hash: {}", hash))?;
+        self.log(&format!("Transaction Landed! Time elapsed: {:?}", duration));
+        self.log(&format!("TX Hash: {}", hash));
         self.log(&format!(
             "TX Value: {}",
             format_units(tx.value.unwrap(), "ether").map_err(|e| {
                 WalletError::TransactionError(format!("Failed to format transaction value: {}", e))
             })?
-        ))?;
+        ));
         Ok(())
     }
 
@@ -412,38 +399,38 @@ impl WalletManager {
         let eth_spent = execution_result.initial_balance - execution_result.final_balance;
         let eth_price = get_eth_price().await?;
 
-        self.log("\n========================================\nActivation Complete!\n========================================\n")?;
+        self.log("\n========================================\nActivation Complete!\n========================================\n");
 
         // Print error summary if any errors occurred
         if !execution_result.errors.is_empty() {
             self.log(&format!(
                 "\nErrors occurred during execution ({} total):",
                 execution_result.errors.len()
-            ))?;
+            ));
 
             // Track total impact
             let mut total_eth_stuck = U256::ZERO;
             let mut total_orphaned_ops = 0;
 
             for error in &execution_result.errors {
-                self.log(&format!("Node {}: {}", error.node_id, error.error))?;
+                self.log(&format!("Node {}: {}", error.node_id, error.error));
 
                 // Analyze and print the impact of this failure
                 match self.analyze_failure_impact(error.node_id).await {
                     Ok(impact) => {
-                        self.log(&format!("{}", impact))?;
+                        self.log(&format!("{}", impact));
                         total_eth_stuck += impact.eth_stuck;
                         total_orphaned_ops += impact.orphaned_operations;
                     }
                     Err(e) => {
-                        self.log(&format!("Failed to analyze impact: {}", e))?;
+                        self.log(&format!("Failed to analyze impact: {}", e));
                     }
                 }
-                self.log("\n")?;
+                self.log("\n");
             }
 
             // Print total impact statistics
-            self.log("\nTotal Impact Summary:")?;
+            self.log("\nTotal Impact Summary:");
             self.log(&format!(
                 "Total ETH Stuck: {} ETH (${:.2})",
                 format_units(total_eth_stuck, "ether").map_err(|e| {
@@ -459,22 +446,22 @@ impl WalletManager {
                         })?
                         .parse::<f64>()
                         .unwrap()
-            ))?;
+            ));
             self.log(&format!(
-                "Total Orphaned Operations: {}\n",
+                "Total Orphaned Operations: {}",
                 total_orphaned_ops
-            ))?;
+            ));
         }
 
-        self.log(&format!("Total Time Elapsed: {:?}", total_duration))?;
+        self.log(&format!("Total Time Elapsed: {:?}", total_duration));
         self.log(&format!(
             "Total Addresses Activated: {}",
             execution_result.new_wallets_count
-        ))?;
+        ));
         self.log(&format!(
             "Average Time Per Address: {:?}",
             total_duration / execution_result.new_wallets_count as u32
-        ))?;
+        ));
         self.log(&format!(
             "Total ETH Spent: {} ETH (${:.2})",
             format_units(eth_spent, "ether").map_err(|e| {
@@ -487,7 +474,7 @@ impl WalletManager {
                     })?
                     .parse::<f64>()
                     .unwrap()
-        ))?;
+        ));
 
         let eth_per_wallet = parse_units(
             (format_units(eth_spent, "ether")
@@ -515,7 +502,7 @@ impl WalletManager {
                     })?
                     .parse::<f64>()
                     .unwrap()
-        ))?;
+        ));
 
         Ok(())
     }

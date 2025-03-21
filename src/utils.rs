@@ -13,6 +13,7 @@ use crate::{
 };
 use alloy::{network::EthereumWallet, signers::local::PrivateKeySigner};
 use dotenv::dotenv;
+use log::info;
 
 /// Standard gas limit for basic ETH transfer transactions
 pub const GAS_LIMIT: u64 = 21000;
@@ -83,7 +84,7 @@ pub async fn get_eth_price() -> Result<f64> {
 pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
     fn print_node(node: &TreeNode<Operation>, depth: usize) {
         let indent = " | ".repeat(depth);
-        println!("{}Operation: {}", indent, node.value);
+        info!("{}Node {}: Operation: {}", indent, node.id, node.value);
         for child in &node.children {
             print_node(child, depth + 1);
         }

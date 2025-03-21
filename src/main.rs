@@ -5,8 +5,15 @@ use alloy::{
 };
 use alloy_primitives::utils::parse_units;
 use dotenv::dotenv;
-use log::info;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use env_logger::Builder;
+use log::{info, LevelFilter};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use active_address::{
     operations::generate_split_loops, utils::pretty_print_tree, wallet::WalletManager,
@@ -15,7 +22,41 @@ use active_address::{
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenv().ok();
-    env_logger::init();
+
+    // Create logs directory if it doesn't exist
+    fs::create_dir_all("logs")?;
+
+    // Generate unique log file name with timestamp
+    let log_file_name = format!(
+        "logs/active_address_{}.log",
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
+
+    // Configure logging to write to both console and file
+    let mut builder = Builder::from_default_env();
+    builder.filter_level(LevelFilter::Info);
+
+    // Create log file
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&log_file_name)?;
+
+    builder.format(|buf, record| {
+        writeln!(
+            buf,
+            "[{}] {} - {}",
+            record.level(),
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            record.args()
+        )
+    });
+
+    // Write to both console and file
+    builder.target(env_logger::Target::Pipe(Box::new(log_file)));
+    builder.init();
+
+    info!("Starting new run, logging to: {}", log_file_name);
 
     let provider = Arc::new(
         ProviderBuilder::new()
