@@ -3,7 +3,7 @@ use std::{
     io::Write,
     ops::Mul,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -72,7 +72,7 @@ pub struct WalletManager {
     id: usize,
     provider: Arc<dyn Provider<Ethereum>>,
     /// Operations tree. Every sub-operation is dependent on the completion of it's parent operation.
-    pub operations: Option<Arc<Mutex<TreeNode<Operation>>>>,
+    pub operations: Option<TreeNode<Operation>>,
     log_file: PathBuf,
     config: Config,
 }
@@ -107,8 +107,6 @@ impl WalletManager {
             .operations
             .as_ref()
             .unwrap()
-            .lock()
-            .unwrap()
             .value
             .from
             .clone();
@@ -116,7 +114,7 @@ impl WalletManager {
         let mut new_wallets = HashSet::new();
 
         let node_result = self
-            .execute_node(Arc::clone(self.operations.as_ref().unwrap()))
+            .execute_node(self.operations.as_ref().unwrap().clone())
             .await?;
         let final_balance = self.get_wallet_balance(&root_wallet).await?;
 
@@ -133,12 +131,11 @@ impl WalletManager {
 
     async fn execute_node(
         &self,
-        node: Arc<Mutex<TreeNode<Operation>>>,
+        node: TreeNode<Operation>,
     ) -> Result<NodeExecutionResult> {
         // execute operation
         let operation = {
-            let guard = node.lock().unwrap();
-            guard.value.clone()
+            node.value.clone()
         };
         let mut new_wallets = HashSet::new();
         self.log(&format!("Executing operation: {}", operation))?;
@@ -147,8 +144,7 @@ impl WalletManager {
 
         // spawn new threads to execute children
         let children = {
-            let guard = node.lock().unwrap();
-            guard.children.clone()
+            node.children.clone()
         };
         for child in &children {
             let child_result = Box::pin(self.execute_node(child.clone())).await?;

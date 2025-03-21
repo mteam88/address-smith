@@ -8,7 +8,7 @@ use dotenv::dotenv;
 use log::info;
 use std::{path::PathBuf, sync::Arc};
 
-use active_address::{operations::{generate_operation_loop, generate_split_loops}, wallet::WalletManager, utils::pretty_print_tree};
+use active_address::{operations::generate_split_loops, wallet::WalletManager, utils::pretty_print_tree};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -37,7 +37,7 @@ async fn main() -> eyre::Result<()> {
     let mut wallet_manager = WalletManager::new(0, provider).await?;
 
     let operations_tree = generate_split_loops(root_wallet, to_activate, 2, parse_units("1", "ether").unwrap().into(), &PathBuf::from("wallets")).await?;
-    pretty_print_tree(&operations_tree.lock().unwrap());
+    pretty_print_tree(&operations_tree);
     wallet_manager.operations = Some(operations_tree);
 
     let execution_result = wallet_manager.parallel_execute_operations().await?;

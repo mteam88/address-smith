@@ -1,7 +1,6 @@
 use alloy::network::EthereumWallet;
 use alloy_primitives::U256;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::tree::TreeNode;
 use crate::types::Operation;
@@ -15,7 +14,7 @@ pub async fn generate_operation_loop(
     total_new_wallets: i32,
     return_wallet: Option<EthereumWallet>,
     backup_dir: &Path,
-) -> eyre::Result<Arc<std::sync::Mutex<TreeNode<Operation>>>> {
+) -> eyre::Result<TreeNode<Operation>> {
     let mut operations = vec![];
     let mut current_wallet = first_wallet.clone();
 
@@ -43,7 +42,7 @@ pub async fn generate_operation_loop(
     let mut current = root.clone();
     for operation in operations.into_iter().skip(1) {
         let new_node = TreeNode::new(operation);
-        TreeNode::add_child(current.clone(), new_node.clone());
+        TreeNode::add_child(&mut current, &new_node);
         current = new_node;
     }
 
@@ -66,7 +65,7 @@ pub async fn generate_split_loops(
     total_loops: i32,
     amount_per_wallet: U256,
     backup_dir: &Path,
-) -> eyre::Result<Arc<std::sync::Mutex<TreeNode<Operation>>>> {
+) -> eyre::Result<TreeNode<Operation>> {
     // Calculate how many wallets per loop
     let wallets_per_loop = total_new_wallets / total_loops;
     if wallets_per_loop < 1 {
@@ -74,7 +73,7 @@ pub async fn generate_split_loops(
     }
 
     // Create the root node with a dummy operation that we'll replace
-    let root = TreeNode::new(Operation {
+    let mut root = TreeNode::new(Operation {
         from: first_wallet.clone(),
         to: first_wallet.clone(),
         amount: None,
@@ -94,13 +93,13 @@ pub async fn generate_split_loops(
 
         // Create a node for this operation
         let first_op_node = TreeNode::new(first_op);
-        TreeNode::add_child(root.clone(), first_op_node.clone());
+        TreeNode::add_child(&mut root, &first_op_node);
 
         // Generate a loop starting from this new wallet
         let loop_root = generate_operation_loop(new_wallet, wallets_per_loop, Some(first_wallet.clone()), backup_dir).await?;
 
         // Add the loop as a child of the first operation
-        TreeNode::add_child(first_op_node, loop_root);
+        TreeNode::add_child(&mut root, &loop_root);
     }    
 
     Ok(root)
