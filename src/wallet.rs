@@ -3,7 +3,7 @@ use std::{collections::HashSet, io::Write, ops::Mul, path::PathBuf, sync::Arc, t
 use crate::{
     error::{Result, WalletError},
     tree::TreeNode,
-    types::{ExecutionResult, NodeError, NodeExecutionResult, Operation},
+    types::{ExecutionResult, FailureImpact, NodeError, NodeExecutionResult, Operation},
     utils::{get_eth_price, GAS_LIMIT},
 };
 use alloy::{
@@ -420,10 +420,50 @@ impl WalletManager {
                 "\nErrors occurred during execution ({} total):",
                 execution_result.errors.len()
             ))?;
+
+            // Track total impact
+            let mut total_eth_stuck = U256::ZERO;
+            let mut total_orphaned_ops = 0;
+
             for error in &execution_result.errors {
                 self.log(&format!("Node {}: {}", error.node_id, error.error))?;
+
+                // Analyze and print the impact of this failure
+                match self.analyze_failure_impact(error.node_id).await {
+                    Ok(impact) => {
+                        self.log(&format!("{}", impact))?;
+                        total_eth_stuck += impact.eth_stuck;
+                        total_orphaned_ops += impact.orphaned_operations;
+                    }
+                    Err(e) => {
+                        self.log(&format!("Failed to analyze impact: {}", e))?;
+                    }
+                }
+                self.log("\n")?;
             }
-            self.log("\n")?;
+
+            // Print total impact statistics
+            self.log("\nTotal Impact Summary:")?;
+            self.log(&format!(
+                "Total ETH Stuck: {} ETH (${:.2})",
+                format_units(total_eth_stuck, "ether").map_err(|e| {
+                    WalletError::TransactionError(format!("Failed to format ETH stuck: {}", e))
+                })?,
+                eth_price
+                    * format_units(total_eth_stuck, "ether")
+                        .map_err(|e| {
+                            WalletError::TransactionError(format!(
+                                "Failed to format ETH stuck: {}",
+                                e
+                            ))
+                        })?
+                        .parse::<f64>()
+                        .unwrap()
+            ))?;
+            self.log(&format!(
+                "Total Orphaned Operations: {}\n",
+                total_orphaned_ops
+            ))?;
         }
 
         self.log(&format!("Total Time Elapsed: {:?}", total_duration))?;
@@ -478,5 +518,50 @@ impl WalletManager {
         ))?;
 
         Ok(())
+    }
+
+    /// Analyzes the impact of a failed operation
+    ///
+    /// # Arguments
+    /// * `node_id` - ID of the failed node
+    ///
+    /// # Returns
+    /// * `Result<FailureImpact>` - Analysis of the failure's impact
+    pub async fn analyze_failure_impact(&self, node_id: usize) -> Result<FailureImpact> {
+        let root_node = self.operations.as_ref().ok_or_else(|| {
+            WalletError::WalletOperationError("No operations tree available".to_string())
+        })?;
+
+        // Find the failed node
+        let failed_node = root_node.find_node_by_id(node_id).ok_or_else(|| {
+            WalletError::WalletOperationError(format!("Node with ID {} not found", node_id))
+        })?;
+
+        // Get stuck ETH amount
+        let eth_stuck = self
+            .get_wallet_balance(&failed_node.value.from)
+            .await
+            .unwrap_or(U256::ZERO);
+        let stuck_address = failed_node.value.from.default_signer().address();
+
+        // Collect all orphaned nodes
+        let mut orphaned_node_ids = Vec::new();
+        Self::collect_orphaned_nodes(failed_node, &mut orphaned_node_ids);
+
+        Ok(FailureImpact {
+            failed_node_id: node_id,
+            eth_stuck,
+            stuck_address,
+            orphaned_operations: orphaned_node_ids.len(),
+            orphaned_node_ids,
+        })
+    }
+
+    /// Recursively collects all node IDs that would be orphaned by a failure
+    fn collect_orphaned_nodes(node: &TreeNode<Operation>, orphaned_ids: &mut Vec<usize>) {
+        for child in &node.children {
+            orphaned_ids.push(child.id);
+            Self::collect_orphaned_nodes(child, orphaned_ids);
+        }
     }
 }

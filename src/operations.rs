@@ -68,9 +68,10 @@ pub async fn generate_split_loops(
     amount_per_wallet: U256,
     backup_dir: &Path,
 ) -> eyre::Result<TreeNode<Operation>> {
-    // Calculate how many wallets per loop
-    let wallets_per_loop = total_new_wallets / total_loops;
-    if wallets_per_loop < 1 {
+    // Calculate how many wallets per loop, putting any remainder in the first loop
+    let base_wallets_per_loop = (total_new_wallets - total_loops) / total_loops;
+    let remainder = (total_new_wallets - total_loops) % total_loops;
+    if base_wallets_per_loop < 1 {
         return Err(eyre::eyre!("Not enough wallets to distribute among loops"));
     }
 
@@ -83,7 +84,7 @@ pub async fn generate_split_loops(
 
     // Create first layer operations (one for each loop)
     let mut last_op_node = &mut root;
-    for _ in 0..total_loops {
+    for loop_index in 0..total_loops {
         // Generate a new wallet for this loop
         let new_wallet = generate_wallet(backup_dir).await?;
 
@@ -99,10 +100,17 @@ pub async fn generate_split_loops(
         TreeNode::add_child(last_op_node, &first_op_node);
         last_op_node = last_op_node.children.last_mut().unwrap();
 
+        // Add remainder wallets to the first loop
+        let wallets_for_this_loop = if loop_index == 0 {
+            base_wallets_per_loop + remainder
+        } else {
+            base_wallets_per_loop
+        };
+
         // Generate a loop starting from this new wallet
         let loop_root = generate_operation_loop(
             new_wallet,
-            wallets_per_loop,
+            wallets_for_this_loop,
             Some(first_wallet.clone()),
             backup_dir,
         )

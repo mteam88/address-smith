@@ -81,3 +81,37 @@ pub struct NodeExecutionResult {
     pub new_wallets: HashSet<alloy::primitives::Address>,
     pub errors: Vec<NodeError>,
 }
+
+/// Analysis of the impact of a failed operation
+#[derive(Debug)]
+pub struct FailureImpact {
+    /// The node ID that failed
+    pub failed_node_id: usize,
+    /// Amount of ETH stuck in the source wallet of the failed operation
+    pub eth_stuck: U256,
+    /// Address where the ETH is stuck
+    pub stuck_address: alloy::primitives::Address,
+    /// Number of operations that can't proceed due to this failure
+    pub orphaned_operations: usize,
+    /// List of node IDs that are orphaned due to this failure
+    pub orphaned_node_ids: Vec<usize>,
+}
+
+impl Display for FailureImpact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Failure Impact Analysis for Node {}:",
+            self.failed_node_id
+        )?;
+        writeln!(
+            f,
+            "ETH Stuck: {} ETH at address {}",
+            format_units(self.eth_stuck, "ether").unwrap_or_else(|_| "ERROR".to_string()),
+            self.stuck_address
+        )?;
+        writeln!(f, "Orphaned Operations: {}", self.orphaned_operations)?;
+        writeln!(f, "Orphaned Node IDs: {:?}", self.orphaned_node_ids)?;
+        Ok(())
+    }
+}
