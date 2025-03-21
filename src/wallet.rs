@@ -3,7 +3,7 @@ use std::{collections::HashSet, io::Write, ops::Mul, path::PathBuf, sync::Arc, t
 use crate::{
     error::{Result, WalletError},
     tree::TreeNode,
-    types::{ExecutionResult, NodeExecutionResult, Operation},
+    types::{ExecutionResult, NodeError, NodeExecutionResult, Operation},
     utils::{get_eth_price, GAS_LIMIT},
 };
 use alloy::{
@@ -101,14 +101,22 @@ impl WalletManager {
         let root_wallet = root_node.value.from.clone();
         let initial_balance = self.get_wallet_balance(&root_wallet).await?;
         let mut new_wallets = HashSet::new();
+        let mut errors = Vec::new();
 
         // If the root node has multiple children, execute them in parallel
         // This is especially beneficial for the split_loops pattern where multiple loops run in parallel
         if !root_node.children.is_empty() {
             // Execute root operation first
             self.log(&format!("Executing root operation: {}", root_node.value))?;
-            self.process_single_operation(&root_node.value, &mut new_wallets)
-                .await?;
+            if let Err(e) = self
+                .process_single_operation(&root_node.value, &mut new_wallets)
+                .await
+            {
+                errors.push(NodeError {
+                    node_id: root_node.id,
+                    error: e,
+                });
+            }
 
             // Now execute all children in parallel
             let mut child_futures = Vec::with_capacity(root_node.children.len());
@@ -123,14 +131,24 @@ impl WalletManager {
             // Process results
             for result in results {
                 match result {
-                    Ok(node_result) => new_wallets.extend(node_result.new_wallets),
-                    Err(e) => return Err(e),
+                    Ok(node_result) => {
+                        new_wallets.extend(node_result.new_wallets);
+                        errors.extend(node_result.errors);
+                    }
+                    Err(e) => {
+                        // This should never happen as execute_node now returns NodeExecutionResult
+                        errors.push(NodeError {
+                            node_id: 0, // Unknown node ID in this case
+                            error: e,
+                        });
+                    }
                 }
             }
         } else {
             // If there's only a simple chain, just execute from the root
             let node_result = self.execute_node(root_node.clone()).await?;
             new_wallets.extend(node_result.new_wallets);
+            errors.extend(node_result.errors);
         }
 
         let final_balance = self.get_wallet_balance(&root_wallet).await?;
@@ -141,16 +159,26 @@ impl WalletManager {
             final_balance,
             root_wallet,
             time_elapsed: start_time.elapsed(),
+            errors,
         })
     }
 
     async fn execute_node(&self, node: TreeNode<Operation>) -> Result<NodeExecutionResult> {
+        let mut new_wallets = HashSet::new();
+        let mut errors = Vec::new();
+
         // Execute operation
         let operation = node.value.clone();
-        let mut new_wallets = HashSet::new();
         self.log(&format!("Executing operation: {}", operation))?;
-        self.process_single_operation(&operation, &mut new_wallets)
-            .await?;
+        if let Err(e) = self
+            .process_single_operation(&operation, &mut new_wallets)
+            .await
+        {
+            errors.push(NodeError {
+                node_id: node.id,
+                error: e,
+            });
+        }
 
         // Now that parent operation is complete, handle children
         let children = node.children.clone();
@@ -170,13 +198,25 @@ impl WalletManager {
             // Process the results
             for result in results {
                 match result {
-                    Ok(child_result) => new_wallets.extend(child_result.new_wallets),
-                    Err(e) => return Err(e),
+                    Ok(child_result) => {
+                        new_wallets.extend(child_result.new_wallets);
+                        errors.extend(child_result.errors);
+                    }
+                    Err(e) => {
+                        // This should never happen as execute_node now returns NodeExecutionResult
+                        errors.push(NodeError {
+                            node_id: 0, // Unknown node ID in this case
+                            error: e,
+                        });
+                    }
                 }
             }
         }
 
-        Ok(NodeExecutionResult { new_wallets })
+        Ok(NodeExecutionResult {
+            new_wallets,
+            errors,
+        })
     }
 
     /// Gets the balance of a wallet
@@ -373,6 +413,18 @@ impl WalletManager {
         let eth_price = get_eth_price().await?;
 
         self.log("\n========================================\nActivation Complete!\n========================================\n")?;
+
+        // Print error summary if any errors occurred
+        if !execution_result.errors.is_empty() {
+            self.log(&format!(
+                "\nErrors occurred during execution ({} total):",
+                execution_result.errors.len()
+            ))?;
+            for error in &execution_result.errors {
+                self.log(&format!("Node {}: {}", error.node_id, error.error))?;
+            }
+            self.log("\n")?;
+        }
 
         self.log(&format!("Total Time Elapsed: {:?}", total_duration))?;
         self.log(&format!(

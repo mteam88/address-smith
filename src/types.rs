@@ -12,6 +12,17 @@ use std::{
 };
 use tokio::time::Duration;
 
+use crate::error::WalletError;
+
+/// Represents an error that occurred during node execution along with the ID of the node
+#[derive(Debug)]
+pub struct NodeError {
+    /// ID of the node where the error occurred
+    pub node_id: usize,
+    /// The error that occurred
+    pub error: WalletError,
+}
+
 /// Represents a single transfer operation between two wallets.
 /// An operation defines the source wallet, destination wallet, and the amount to transfer.
 #[derive(Debug, Clone)]
@@ -62,8 +73,11 @@ pub struct ExecutionResult {
     pub root_wallet: EthereumWallet,
     /// Total time taken to execute all operations
     pub time_elapsed: Duration,
+    /// List of errors that occurred during execution
+    pub errors: Vec<NodeError>,
 }
 
 pub struct NodeExecutionResult {
     pub new_wallets: HashSet<alloy::primitives::Address>,
+    pub errors: Vec<NodeError>,
 }
