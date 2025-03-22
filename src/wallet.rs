@@ -15,7 +15,6 @@ use alloy::{
     rpc::types::TransactionRequest,
 };
 use alloy_primitives::utils::parse_units;
-use futures::future;
 use log::{info, warn};
 use tokio::sync::RwLock;
 
@@ -283,7 +282,6 @@ impl WalletManager {
 
                         async move {
                             let operation = node.value.clone();
-                            let node_id = node.id;
 
                             // Execute the operation
                             let result = self
