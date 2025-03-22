@@ -75,7 +75,8 @@ pub async fn generate_operation_loop(
     let mut operations = vec![];
     let mut current_wallet = first_wallet.clone();
 
-    for _ in 0..total_new_wallets {
+    // Create chain of operations through new wallets
+    for _ in 0..(total_new_wallets - 1) {
         let next_wallet = generate_wallet(backup_dir).await?;
         let operation = Operation {
             from: current_wallet,
@@ -86,13 +87,9 @@ pub async fn generate_operation_loop(
         current_wallet = next_wallet;
     }
 
-    // At this point, operations vector is guaranteed to be non-empty
+    // Create final operation back to return wallet
     operations.push(Operation {
-        from: operations
-            .last()
-            .expect("operations vector cannot be empty")
-            .to
-            .clone(),
+        from: current_wallet,
         to: return_wallet.unwrap_or(first_wallet),
         amount: None,
     });
@@ -111,60 +108,60 @@ pub async fn generate_operation_loop(
     Ok(root)
 }
 
-/// Generates a parallelizable tree of operations where the first operations create new wallets and each have a loop of children.
-///
-/// # Arguments
-/// * `first_wallet` - The first wallet to start the tree
-/// * `total_new_wallets` - The total number of new wallets to create (first layer and all created by children loops)
-/// * `total_loops` - The number of loops to create
-/// * `amount_per_wallet` - The amount of ether to send to each new first layer wallet
-///
-/// # Returns
-/// * `TreeNode<Operation>` - The root node of the built tree
-pub async fn generate_split_loops(
-    first_wallet: EthereumWallet,
-    total_new_wallets: i32,
-    total_loops: i32,
-    amount_per_wallet: U256,
-    backup_dir: &Path,
-) -> eyre::Result<TreeNode<Operation>> {
-    // Calculate how many wallets per loop, putting any remainder in the first loop
-    let base_wallets_per_loop = (total_new_wallets - total_loops) / total_loops;
-    let remainder = (total_new_wallets - total_loops) % total_loops;
-    if base_wallets_per_loop < 1 {
-        return Err(eyre::eyre!("Not enough wallets to distribute among loops"));
-    }
+// /// Generates a parallelizable tree of operations where the first operations create new wallets and each have a loop of children.
+// ///
+// /// # Arguments
+// /// * `first_wallet` - The first wallet to start the tree
+// /// * `total_new_wallets` - The total number of new wallets to create (first layer and all created by children loops)
+// /// * `total_loops` - The number of loops to create
+// /// * `amount_per_wallet` - The amount of ether to send to each new first layer wallet
+// ///
+// /// # Returns
+// /// * `TreeNode<Operation>` - The root node of the built tree
+// pub async fn generate_split_loops(
+//     first_wallet: EthereumWallet,
+//     total_new_wallets: i32,
+//     total_loops: i32,
+//     amount_per_wallet: U256,
+//     backup_dir: &Path,
+// ) -> eyre::Result<TreeNode<Operation>> {
+//     // Calculate how many wallets per loop, putting any remainder in the first loop
+//     let base_wallets_per_loop = (total_new_wallets - total_loops) / total_loops;
+//     let remainder = (total_new_wallets - total_loops) % total_loops;
+//     if base_wallets_per_loop < 1 {
+//         return Err(eyre::eyre!("Not enough wallets to distribute among loops"));
+//     }
 
-    let mut root = create_dummy_root(&first_wallet);
-    let mut last_op_node = &mut root;
+//     let mut root = create_dummy_root(&first_wallet);
+//     let mut last_op_node = &mut root;
 
-    // Create first layer operations (one for each loop)
-    for loop_index in 0..total_loops {
-        // Create and attach funding operation
-        let (funding_op_node, new_wallet) =
-            create_funding_operation(&first_wallet, amount_per_wallet, backup_dir).await?;
-        TreeNode::add_child(last_op_node, &funding_op_node);
-        last_op_node = last_op_node.children.last_mut().unwrap();
+//     // Create first layer operations (one for each loop)
+//     for loop_index in 0..total_loops {
+//         // Create and attach funding operation
+//         let (funding_op_node, new_wallet) =
+//             create_funding_operation(&first_wallet, amount_per_wallet, backup_dir).await?;
+//         TreeNode::add_child(last_op_node, &funding_op_node);
+//         last_op_node = last_op_node.children.last_mut().unwrap();
 
-        // Calculate wallets for this loop and attach it
-        let wallets_for_this_loop = if loop_index == 0 {
-            base_wallets_per_loop + remainder
-        } else {
-            base_wallets_per_loop
-        };
+//         // Calculate wallets for this loop and attach it
+//         let wallets_for_this_loop = if loop_index == 0 {
+//             base_wallets_per_loop + remainder
+//         } else {
+//             base_wallets_per_loop
+//         };
 
-        attach_loop_to_parent(
-            last_op_node,
-            new_wallet,
-            wallets_for_this_loop,
-            first_wallet.clone(),
-            backup_dir,
-        )
-        .await?;
-    }
+//         attach_loop_to_parent(
+//             last_op_node,
+//             new_wallet,
+//             wallets_for_this_loop,
+//             first_wallet.clone(),
+//             backup_dir,
+//         )
+//         .await?;
+//     }
 
-    Ok(root)
-}
+//     Ok(root)
+// }
 
 /// Generates a tree of operations where loops are balanced to end at approximately the same depth.
 /// The first operations are sequential (funding from the same wallet) and each has a loop of
@@ -181,53 +178,22 @@ pub async fn generate_split_loops(
 pub async fn generate_balanced_split_loops(
     first_wallet: EthereumWallet,
     total_new_wallets: i32,
-    total_loops: i32,
+    max_total_loops: i32,
     amount_per_wallet: U256,
     backup_dir: &Path,
 ) -> eyre::Result<TreeNode<Operation>> {
-    // First, calculate how many wallets we need for the funding operations
-    let funding_wallets = total_loops;
-    let remaining_wallets = total_new_wallets - funding_wallets;
-
-    if remaining_wallets < total_loops {
-        return Err(eyre::eyre!(
-            "Not enough wallets to create balanced loops. Need at least {} wallets but got {}",
-            total_loops * 2,
-            total_new_wallets
-        ));
-    }
-
-    // Calculate decreasing sequence of wallets per loop
-    let mut wallets_per_loop = Vec::with_capacity(total_loops as usize);
-    let mut remaining = remaining_wallets;
-
-    // Calculate base unit ensuring at least 1 wallet per loop
-    let base_unit = std::cmp::max(
-        1,
-        (2 * remaining_wallets) / (total_loops * (total_loops + 1)),
-    );
-
-    for i in 0..total_loops {
-        let wallets = if i == total_loops - 1 {
-            remaining.max(1) // Ensure last loop gets at least 1 wallet
-        } else {
-            std::cmp::max(1, std::cmp::min(base_unit * (total_loops - i), remaining))
-        };
-        wallets_per_loop.push(wallets);
-        remaining -= wallets;
-        if remaining <= 0 && i < total_loops - 1 {
-            // If we run out of wallets but still have loops to create,
-            // give 1 wallet to each remaining loop
-            wallets_per_loop.resize(total_loops as usize, 1);
-            break;
-        }
-    }
+    let wallets_per_loop = calculate_wallets_per_loop(total_new_wallets, max_total_loops);
 
     let mut root = create_dummy_root(&first_wallet);
     let mut last_op_node = &mut root;
 
     // Create the chain of funding operations
     for wallets_in_loop in wallets_per_loop {
+        // Skip if the loop is empty
+        if wallets_in_loop == 0 {
+            continue;
+        }
+
         // Create and attach funding operation
         let (funding_op_node, new_wallet) =
             create_funding_operation(&first_wallet, amount_per_wallet, backup_dir).await?;
@@ -246,4 +212,69 @@ pub async fn generate_balanced_split_loops(
     }
 
     Ok(root)
+}
+
+/// Distributes `total_new_wallets` across up to `max_total_loops` loops
+/// so that the overall completion time (funding offset + tasks per loop)
+/// is minimized. Returns a Vec where each element is the number of tasks
+/// allocated to that loop in order.
+fn calculate_wallets_per_loop(total_new_wallets: i32, max_total_loops: i32) -> Vec<i32> {
+    // Edge cases
+    if total_new_wallets <= 0 || max_total_loops <= 0 {
+        return vec![];
+    }
+
+    // 1. Define a search range [left, right].
+    // An upper bound for the time could be total_new_wallets + max_total_loops
+    // (worst case: all tasks to 1 loop, with the rest loops "wasted", plus offsets).
+    let mut left = 0;
+    let mut right = total_new_wallets + max_total_loops; // safe big upper bound
+
+    // 2. Binary search for the minimal feasible T.
+    while left < right {
+        let mid = (left + right) / 2;
+
+        // Calculate capacity if each loop i can take up to (mid - i) tasks,
+        // for i in 0..(loop_count - 1), limited by i < mid (since mid - i <= 0 otherwise).
+        let used_loops = std::cmp::min(max_total_loops, mid);
+        let mut capacity: i64 = 0; // might exceed i32 during sum
+        for i in 0..used_loops {
+            let cap = mid - i;
+            if cap > 0 {
+                capacity += cap as i64;
+            } else {
+                break;
+            }
+        }
+
+        // Compare the capacity to total_new_wallets
+        if capacity >= total_new_wallets as i64 {
+            // mid is large enough, try to reduce the upper bound
+            right = mid;
+        } else {
+            // mid is not large enough
+            left = mid + 1;
+        }
+    }
+
+    let min_time = left;
+
+    // 3. Assign tasks to each loop in order
+    let mut result = Vec::new();
+    let mut remaining = total_new_wallets;
+    for i in 0..max_total_loops {
+        // if offset i is already >= min_time, (min_time - i) would be <= 0
+        if i >= min_time {
+            break;
+        }
+        let can_assign = min_time - i;
+        let assign = can_assign.min(remaining);
+        result.push(assign);
+        remaining -= assign;
+        if remaining <= 0 {
+            break;
+        }
+    }
+
+    result
 }

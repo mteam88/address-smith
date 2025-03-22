@@ -16,7 +16,7 @@ use std::{
 };
 
 use active_address::{
-    operations::{generate_balanced_split_loops, generate_split_loops}, utils::pretty_print_tree, wallet::WalletManager,
+    operations::generate_balanced_split_loops, utils::pretty_print_tree, wallet::WalletManager,
 };
 
 #[tokio::main]
