@@ -218,9 +218,7 @@ pub async fn generate_balanced_split_loops(
         if remaining <= 0 && i < total_loops - 1 {
             // If we run out of wallets but still have loops to create,
             // give 1 wallet to each remaining loop
-            for _ in (i + 1)..total_loops {
-                wallets_per_loop.push(1);
-            }
+            wallets_per_loop.resize(total_loops as usize, 1);
             break;
         }
     }
