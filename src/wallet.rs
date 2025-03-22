@@ -482,8 +482,10 @@ impl WalletManager {
                 Err(e) => {
                     // if e is transaction error, we must check if the transaction actually did land
                     if let WalletError::TransactionError(_, Some(hash)) = e {
+                        // warn log
+                        warn!("Transaction failed, waiting 10 seconds before checking if it landed");
                         // let rpc think
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::time::sleep(Duration::from_secs(10)).await;
                         let receipt = self.provider.get_transaction_receipt(hash).await;
                         if let Ok(Some(receipt)) = receipt {
                             if receipt.status() {
