@@ -39,7 +39,7 @@ impl Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.from.default_signer().address() != self.to.default_signer().address() {
             if let Some(amount) = self.amount {
-                writeln!(
+                write!(
                     f,
                     "Transfer {} ETH from {} to {}",
                     format_units(amount, "ether").unwrap(),
@@ -47,7 +47,7 @@ impl Display for Operation {
                     self.to.default_signer().address()
                 )
             } else {
-                writeln!(
+                write!(
                     f,
                     "Transfer all available funds from {} to {}",
                     self.from.default_signer().address(),
@@ -55,7 +55,7 @@ impl Display for Operation {
                 )
             }
         } else {
-            writeln!(f, "NOOP")
+            write!(f, "NOOP")
         }
     }
 }
@@ -168,6 +168,13 @@ impl ProgressStats {
             0.0
         } else {
             let window_duration = now - self.recent_operations[0];
+
+            // Ensure we don't divide by a very small duration
+            // Using a threshold of 1 millisecond
+            if window_duration.as_secs_f64() < 0.001 {
+                return 0.0; // Return zero if timing window is too small
+            }
+
             (self.recent_operations.len() as f64) / window_duration.as_secs_f64() * 60.0
         }
     }
@@ -179,7 +186,9 @@ impl ProgressStats {
 
         let elapsed = self.start_time.elapsed();
         let ops_per_second = self.completed_operations as f64 / elapsed.as_secs_f64();
-        let remaining_ops = self.total_operations.saturating_sub(self.completed_operations);
+        let remaining_ops = self
+            .total_operations
+            .saturating_sub(self.completed_operations);
         let remaining_secs = remaining_ops as f64 / ops_per_second;
 
         Some(std::time::Duration::from_secs_f64(remaining_secs))

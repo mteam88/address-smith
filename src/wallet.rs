@@ -406,8 +406,28 @@ impl WalletManager {
                 WalletError::ProviderError(format!("Failed to get chain ID: {}", e))
             })?;
 
-        let max_value = self.calculate_max_value(&from_wallet, gas_price).await?;
-        let value = value.unwrap_or(max_value);
+        // If a specific value is provided, use it, otherwise calculate the max value
+        let value = if let Some(specified_value) = value {
+            specified_value
+        } else {
+            let max_value = self.calculate_max_value(&from_wallet, gas_price).await?;
+            // If max_value is zero, it likely means insufficient balance, which should error
+            // only when trying to send all available funds
+            if max_value.is_zero() {
+                let balance = self.get_wallet_balance(&from_wallet).await?;
+                let gas = gas_price * U256::from(GAS_LIMIT);
+                let gas_buffer = U256::from(self.config.gas_buffer_multiplier);
+                let total_gas_cost = gas_buffer.mul(gas);
+
+                return Err(WalletError::InsufficientBalance(format!(
+                    "Insufficient balance for gas buffer: {} < {} for wallet: {}.",
+                    balance,
+                    total_gas_cost,
+                    from_wallet.default_signer().address()
+                )));
+            }
+            max_value
+        };
 
         Ok(TransactionRequest::default()
             .with_from(from_wallet.default_signer().address())
@@ -424,15 +444,21 @@ impl WalletManager {
         let balance = self.get_wallet_balance(wallet).await?;
         let gas = gas_price * U256::from(GAS_LIMIT);
         let gas_buffer = U256::from(self.config.gas_buffer_multiplier);
-        if balance < gas_buffer.mul(gas) {
+        let total_gas_cost = gas_buffer.mul(gas);
+
+        if balance < total_gas_cost {
             warn!(
                 "Insufficient balance for gas buffer: {} < {} for wallet: {}.",
                 balance,
-                gas_buffer.mul(gas),
+                total_gas_cost,
                 wallet.default_signer().address()
             );
+            // Return zero when balance is insufficient instead of throwing an error
+            // The calling function will handle this appropriately
+            return Ok(U256::ZERO);
         }
-        Ok(balance - gas_buffer.mul(gas))
+
+        Ok(balance - total_gas_cost)
     }
 
     /// Sends a transaction without retry logic
@@ -454,7 +480,23 @@ impl WalletManager {
             WalletError::TransactionError(format!("Failed to build transaction: {}", e), None)
         })?;
 
-        self.log(&format!("Sending transaction... with value: {} and gas price: {} and gas limit: {} and total gas paid: {} and hash: {}", tx.value.unwrap(), tx.gas_price.unwrap(), GAS_LIMIT, GAS_LIMIT * tx.gas_price.unwrap() as u64, tx_envelope.hash()));
+        // Safely calculate total gas cost without direct multiplication that could overflow
+        let value_str = format_units(tx.value.unwrap(), "ether").map_err(|e| {
+            WalletError::TransactionError(
+                format!("Failed to format transaction value: {}", e),
+                None,
+            )
+        })?;
+
+        let gas_price_str = format!("{}", tx.gas_price.unwrap());
+
+        self.log(&format!(
+            "Sending transaction... Value: {} ETH, Gas Price: {} wei, Gas Limit: {}, Hash: {}",
+            value_str,
+            gas_price_str,
+            GAS_LIMIT,
+            tx_envelope.hash()
+        ));
 
         let start = tokio::time::Instant::now();
         let receipt = self
@@ -486,16 +528,14 @@ impl WalletManager {
         hash: alloy::primitives::TxHash,
         duration: Duration,
     ) -> Result<()> {
-        self.log(&format!("Transaction Landed! Time elapsed: {:?}", duration));
-        self.log(&format!("TX Hash: {}", hash));
         self.log(&format!(
-            "TX Value: {}",
-            format_units(tx.value.unwrap(), "ether").map_err(|e| {
-                WalletError::TransactionError(
-                    format!("Failed to format transaction value: {}", e),
-                    None,
-                )
-            })?
+            "Transaction Landed! Time elapsed: {:?} | TX Hash: {} | TX Value: {}",
+            duration,
+            hash,
+            format_units(tx.value.unwrap(), "ether").map_err(|e| WalletError::TransactionError(
+                format!("Failed to format transaction value: {}", e),
+                None
+            ))?
         ));
         Ok(())
     }
@@ -508,45 +548,70 @@ impl WalletManager {
 
         loop {
             // Rebuild transaction from scratch on each attempt
-            let tx = self
+            let tx_result = self
                 .build_transaction(
                     operation.from.clone(),
                     operation.to.default_signer().address(),
                     operation.amount,
                 )
-                .await?;
+                .await;
 
-            match self.send_transaction(tx, operation.from.clone()).await {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    // if e is transaction error, we must check if the transaction actually did land
-                    if let WalletError::TransactionError(_, Some(hash)) = e {
-                        // warn log
-                        warn!(
-                            "Transaction failed, waiting 10 seconds before checking if it landed"
-                        );
-                        // let rpc think
-                        tokio::time::sleep(Duration::from_secs(10)).await;
-                        let receipt = self.provider.get_transaction_receipt(hash).await;
-                        if let Ok(Some(receipt)) = receipt {
-                            if receipt.status() {
-                                return Ok(());
+            // Handle InsufficientBalance error as a retriable error
+            match tx_result {
+                Ok(tx) => {
+                    match self.send_transaction(tx, operation.from.clone()).await {
+                        Ok(_) => return Ok(()),
+                        Err(e) => {
+                            // if e is transaction error, we must check if the transaction actually did land
+                            if let WalletError::TransactionError(_, Some(hash)) = e {
+                                // warn log
+                                warn!(
+                                    "Transaction failed, waiting 10 seconds before checking if it landed"
+                                );
+                                // let rpc think
+                                tokio::time::sleep(Duration::from_secs(10)).await;
+                                let receipt = self.provider.get_transaction_receipt(hash).await;
+                                if let Ok(Some(receipt)) = receipt {
+                                    if receipt.status() {
+                                        return Ok(());
+                                    }
+                                }
                             }
+
+                            if retry_count >= max_retries {
+                                return Err(e);
+                            }
+                            retry_count += 1;
+                            let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
+
+                            warn!(
+                                "Transaction failed (attempt {}/{}), rebuilding and retrying in {:?}: {}",
+                                retry_count, max_retries, delay, e
+                            );
+
+                            tokio::time::sleep(delay).await;
                         }
                     }
+                }
+                Err(e) => {
+                    // For InsufficientBalance, retry after waiting for more funds to arrive
+                    if let WalletError::InsufficientBalance(msg) = &e {
+                        if retry_count >= max_retries {
+                            return Err(e);
+                        }
+                        retry_count += 1;
+                        let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
 
-                    if retry_count >= max_retries {
+                        warn!(
+                            "Insufficient balance (attempt {}/{}), retrying in {:?}: {}",
+                            retry_count, max_retries, delay, msg
+                        );
+
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        // For other build errors, propagate them
                         return Err(e);
                     }
-                    retry_count += 1;
-                    let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
-
-                    warn!(
-                        "Transaction failed (attempt {}/{}), rebuilding and retrying in {:?}: {}",
-                        retry_count, max_retries, delay, e
-                    );
-
-                    tokio::time::sleep(delay).await;
                 }
             }
         }

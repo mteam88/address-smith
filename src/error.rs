@@ -32,6 +32,10 @@ pub enum WalletError {
     /// Error during wallet operation execution
     #[error("Wallet operation error: {0}")]
     WalletOperationError(String),
+
+    /// Insufficient balance for gas buffer
+    #[error("Insufficient balance for gas buffer: {0}")]
+    InsufficientBalance(String),
 }
 
 /// A Result type that uses our custom WalletError as the error type.
