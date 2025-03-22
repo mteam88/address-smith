@@ -176,66 +176,19 @@ impl WalletManager {
 
         let root_wallet = root_node.value.from.clone();
         let initial_balance = self.get_wallet_balance(&root_wallet).await?;
-        let mut new_wallets = HashSet::new();
-        let mut errors = Vec::new();
 
-        // If the root node has multiple children, execute them in parallel
-        if !root_node.children.is_empty() {
-            // Execute root operation first
-            self.log(&format!("Executing root operation: {}", root_node.value));
-            if let Err(e) = self
-                .process_single_operation(&root_node.value, &mut new_wallets)
-                .await
-            {
-                errors.push(NodeError {
-                    node_id: root_node.id,
-                    error: e,
-                });
-                self.update_progress(false).await;
-            } else {
-                self.update_progress(true).await;
-            }
-
-            // Now execute all children in parallel
-            let mut child_futures = Vec::with_capacity(root_node.children.len());
-
-            for child in root_node.children.clone() {
-                child_futures.push(self.execute_node(child));
-            }
-
-            // Wait for all child operations to complete
-            let results = future::join_all(child_futures).await;
-
-            // Process results
-            for result in results {
-                match result {
-                    Ok(node_result) => {
-                        new_wallets.extend(node_result.new_wallets);
-                        errors.extend(node_result.errors);
-                    }
-                    Err(e) => {
-                        errors.push(NodeError {
-                            node_id: 0,
-                            error: e,
-                        });
-                    }
-                }
-            }
-        } else {
-            let node_result = self.execute_node(root_node.clone()).await?;
-            new_wallets.extend(node_result.new_wallets);
-            errors.extend(node_result.errors);
-        }
+        // Execute all operations in the tree
+        let node_result = self.execute_node(root_node.clone()).await?;
 
         let final_balance = self.get_wallet_balance(&root_wallet).await?;
 
         Ok(ExecutionResult {
-            new_wallets_count: new_wallets.len() as i32,
+            new_wallets_count: node_result.new_wallets.len() as i32,
             initial_balance,
             final_balance,
             root_wallet,
             time_elapsed: start_time.elapsed(),
-            errors,
+            errors: node_result.errors,
         })
     }
 
@@ -257,6 +210,7 @@ impl WalletManager {
         count
     }
 
+    /// Executes a node and all its child operations
     async fn execute_node(&self, node: TreeNode<Operation>) -> Result<NodeExecutionResult> {
         let mut new_wallets = HashSet::new();
         let mut errors = Vec::new();
@@ -264,10 +218,16 @@ impl WalletManager {
         // Execute operation
         let operation = node.value.clone();
         self.log(&format!("Executing operation: {}", operation));
-        if let Err(e) = self
+        let result = self
             .process_single_operation(&operation, &mut new_wallets)
-            .await
-        {
+            .await;
+
+        // Update progress based on the result
+        let success = result.is_ok();
+        self.update_progress(success).await;
+
+        // Handle errors
+        if let Err(e) = result {
             errors.push(NodeError {
                 node_id: node.id,
                 error: e,
@@ -343,9 +303,7 @@ impl WalletManager {
             return Ok(());
         }
 
-        let result = self.build_and_send_operation(operation).await;
-        self.update_progress(result.is_ok()).await;
-        result
+        self.build_and_send_operation(operation).await
     }
 
     /// Logs a message
