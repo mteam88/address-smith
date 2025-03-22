@@ -177,8 +177,10 @@ impl WalletManager {
         let root_wallet = root_node.value.from.clone();
         let initial_balance = self.get_wallet_balance(&root_wallet).await?;
 
-        // Execute all operations in the tree
-        let node_result = self.execute_node(root_node.clone()).await?;
+        // Execute all operations in the tree using the task queue approach
+        let node_result = self
+            .execute_operations_with_task_queue(root_node.clone())
+            .await?;
 
         let final_balance = self.get_wallet_balance(&root_wallet).await?;
 
@@ -210,61 +212,133 @@ impl WalletManager {
         count
     }
 
-    /// Executes a node and all its child operations
-    async fn execute_node(&self, node: TreeNode<Operation>) -> Result<NodeExecutionResult> {
-        let mut new_wallets = HashSet::new();
-        let mut errors = Vec::new();
+    /// Executes operations using a task queue approach to avoid recursion stack overflow
+    /// while maintaining parallel execution of sibling operations
+    async fn execute_operations_with_task_queue(
+        &self,
+        root_node: TreeNode<Operation>,
+    ) -> Result<NodeExecutionResult> {
+        // Create a task queue using VecDeque
+        use futures::future;
+        use std::collections::{HashMap, HashSet, VecDeque};
 
-        // Execute operation
-        let operation = node.value.clone();
-        self.log(&format!("Executing operation: {}", operation));
-        let result = self
-            .process_single_operation(&operation, &mut new_wallets)
-            .await;
-
-        // Update progress based on the result
-        let success = result.is_ok();
-        self.update_progress(success).await;
-
-        // Handle errors
-        if let Err(e) = result {
-            errors.push(NodeError {
-                node_id: node.id,
-                error: e,
-            });
+        // Store tasks and their state
+        #[derive(Clone)]
+        struct Task {
+            node: TreeNode<Operation>,
+            parent_id: Option<usize>, // None for root
+            is_executed: bool,
         }
 
-        // Now that parent operation is complete, handle children
-        let children = node.children.clone();
+        let mut queue = VecDeque::new();
+        let mut new_wallets = HashSet::new();
+        let mut errors = Vec::new();
+        let mut task_map: HashMap<usize, Task> = HashMap::new();
 
-        if !children.is_empty() {
-            // Create a vector to store the futures
-            let mut child_futures = Vec::with_capacity(children.len());
+        // Add root task to the queue
+        queue.push_back(Task {
+            node: root_node.clone(),
+            parent_id: None,
+            is_executed: false,
+        });
 
-            // Create futures for all child operations without spawning new tasks
-            for child in children {
-                child_futures.push(self.execute_node(child));
+        // Process tasks until the queue is empty
+        while !queue.is_empty() {
+            // Identify all tasks that are ready to execute in parallel
+            let mut ready_tasks = Vec::new();
+            let mut pending_tasks = VecDeque::new();
+
+            // Sort tasks into ready and pending
+            while let Some(task) = queue.pop_front() {
+                // Check if the task is ready to execute (root or parent has been executed)
+                let parent_executed = task
+                    .parent_id
+                    .map(|id| task_map.get(&id).map(|t| t.is_executed).unwrap_or(false))
+                    .unwrap_or(true); // Root has no parent, so it's ready
+
+                if !task.is_executed && parent_executed {
+                    // This task is ready to be executed
+                    ready_tasks.push(task);
+                } else {
+                    // This task must wait - add it back to the pending queue
+                    pending_tasks.push_back(task);
+                }
             }
 
-            // Execute all child operations concurrently and collect results
-            let results = future::join_all(child_futures).await;
+            // If we found no ready tasks but still have pending tasks, we have a dependency cycle
+            if ready_tasks.is_empty() && !pending_tasks.is_empty() {
+                return Err(WalletError::WalletOperationError(
+                    "Dependency cycle detected in operations".to_string(),
+                ));
+            }
 
-            // Process the results
-            for result in results {
-                match result {
-                    Ok(child_result) => {
-                        new_wallets.extend(child_result.new_wallets);
-                        errors.extend(child_result.errors);
-                    }
-                    Err(e) => {
-                        // This should never happen as execute_node now returns NodeExecutionResult
+            // Process all ready tasks in parallel
+            if !ready_tasks.is_empty() {
+                // Create a future for each ready task
+                let futures = ready_tasks
+                    .iter()
+                    .map(|task| {
+                        let node = task.node.clone();
+                        let mut task_new_wallets = HashSet::new();
+
+                        async move {
+                            let operation = node.value.clone();
+                            let node_id = node.id;
+
+                            // Execute the operation
+                            let result = self
+                                .process_single_operation(&operation, &mut task_new_wallets)
+                                .await;
+
+                            // Return a tuple of (node, result, task_new_wallets) to process after all parallel tasks complete
+                            (node, result, task_new_wallets, task.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // Execute all ready tasks in parallel
+                let results = future::join_all(futures).await;
+
+                // Process results and mark tasks as completed
+                for (node, result, task_new_wallets, mut task) in results {
+                    let success = result.is_ok();
+
+                    // Log the operation
+                    self.log(&format!("Executing operation: {}", node.value));
+
+                    // Update progress stats
+                    self.update_progress(success).await;
+
+                    // Collect new wallets
+                    new_wallets.extend(task_new_wallets);
+
+                    // Handle errors
+                    if let Err(e) = result {
                         errors.push(NodeError {
-                            node_id: 0, // Unknown node ID in this case
+                            node_id: node.id,
                             error: e,
                         });
                     }
+
+                    // Mark task as executed
+                    task.is_executed = true;
+                    task_map.insert(node.id, task);
+
+                    // If operation succeeded, queue up its children
+                    if success {
+                        for child in &node.children {
+                            pending_tasks.push_back(Task {
+                                node: child.clone(),
+                                parent_id: Some(node.id),
+                                is_executed: false,
+                            });
+                        }
+                    }
                 }
             }
+
+            // Move pending tasks back to the main queue
+            queue = pending_tasks;
         }
 
         Ok(NodeExecutionResult {
