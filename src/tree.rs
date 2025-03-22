@@ -51,15 +51,28 @@ impl<T: Clone + Debug> TreeNode<T> {
     /// # Returns
     /// * `Vec<T>` - Flattened list of operations in dependency order
     pub fn flatten(&self) -> Vec<T> {
-        let mut operations_list = vec![];
-        operations_list.push(self.value.clone());
-        for child in self.children.iter() {
-            operations_list.extend(child.flatten());
+        let mut operations_list = Vec::new();
+        let mut stack = vec![(self, false)];
+
+        while let Some((node, processed)) = stack.pop() {
+            if processed {
+                // Node already processed, add its value to the result
+                operations_list.push(node.value.clone());
+            } else {
+                // Re-add this node as processed
+                stack.push((node, true));
+
+                // Add all children in reverse order (so they come out in correct order when popped)
+                for child in node.children.iter().rev() {
+                    stack.push((child, false));
+                }
+            }
         }
+
         operations_list
     }
 
-    /// Recursively searches for a node with the given ID.
+    /// Searches for a node with the given ID using an iterative approach.
     /// Returns None if no node with the ID is found.
     ///
     /// # Arguments
@@ -68,13 +81,24 @@ impl<T: Clone + Debug> TreeNode<T> {
     /// # Returns
     /// * `Option<&TreeNode<T>>` - The node with the given ID, if found
     pub fn find_node_by_id(&self, id: usize) -> Option<&TreeNode<T>> {
+        // Fast path: check if this is the node we're looking for
         if self.id == id {
             return Some(self);
         }
 
-        for child in &self.children {
-            if let Some(found) = child.find_node_by_id(id) {
-                return Some(found);
+        // Use a stack for iterative traversal
+        let mut stack = Vec::new();
+        stack.push(self);
+
+        while let Some(node) = stack.pop() {
+            // Check if this node matches the ID
+            if node.id == id {
+                return Some(node);
+            }
+
+            // Add all children to the stack for processing
+            for child in node.children.iter().rev() {
+                stack.push(child);
             }
         }
 

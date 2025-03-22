@@ -82,12 +82,18 @@ pub async fn get_eth_price() -> Result<f64> {
 /// # Arguments
 /// * `tree` - The root node of the operation tree to print
 pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
-    fn print_node(node: &TreeNode<Operation>, depth: usize) {
+    // Stack holds (node, depth) pairs
+    let mut stack = vec![(tree, 0)];
+
+    // Process stack until empty
+    while let Some((node, depth)) = stack.pop() {
+        // Print the current node
         let indent = " | ".repeat(depth);
         info!("{}Node {}: Operation: {}", indent, node.id, node.value);
-        for child in &node.children {
-            print_node(child, depth + 1);
+
+        // Add children to the stack in reverse order (so they print in correct order)
+        for child in node.children.iter().rev() {
+            stack.push((child, depth + 1));
         }
     }
-    print_node(tree, 0);
 }

@@ -239,12 +239,21 @@ impl WalletManager {
         })
     }
 
-    /// Counts total number of operations in the tree
+    /// Counts total number of operations in the tree using an iterative approach
     fn count_total_operations(node: &TreeNode<Operation>) -> usize {
-        let mut count = 1; // Count current node
-        for child in &node.children {
-            count += Self::count_total_operations(child);
+        let mut count = 0;
+        let mut stack = vec![node];
+
+        while let Some(current) = stack.pop() {
+            // Count the current node
+            count += 1;
+
+            // Add all children to the stack
+            for child in &current.children {
+                stack.push(child);
+            }
         }
+
         count
     }
 
@@ -411,11 +420,11 @@ impl WalletManager {
         tx: &TransactionRequest,
         wallet: &EthereumWallet,
     ) -> Result<()> {
-        self.log("Sending transaction...");
-
         let tx_envelope = tx.clone().build(wallet).await.map_err(|e| {
             WalletError::TransactionError(format!("Failed to build transaction: {}", e), None)
         })?;
+
+        self.log(&format!("Sending transaction... with value: {} and gas price: {} and gas limit: {} and total gas paid: {} and hash: {}", tx.value.unwrap(), tx.gas_price.unwrap(), GAS_LIMIT, GAS_LIMIT * tx.gas_price.unwrap() as u64, tx_envelope.hash()));
 
         let start = tokio::time::Instant::now();
         let receipt = self
@@ -483,7 +492,9 @@ impl WalletManager {
                     // if e is transaction error, we must check if the transaction actually did land
                     if let WalletError::TransactionError(_, Some(hash)) = e {
                         // warn log
-                        warn!("Transaction failed, waiting 10 seconds before checking if it landed");
+                        warn!(
+                            "Transaction failed, waiting 10 seconds before checking if it landed"
+                        );
                         // let rpc think
                         tokio::time::sleep(Duration::from_secs(10)).await;
                         let receipt = self.provider.get_transaction_receipt(hash).await;
@@ -674,11 +685,16 @@ impl WalletManager {
         })
     }
 
-    /// Recursively collects all node IDs that would be orphaned by a failure
+    /// Collects all node IDs that would be orphaned by a failure using an iterative approach
     fn collect_orphaned_nodes(node: &TreeNode<Operation>, orphaned_ids: &mut Vec<usize>) {
-        for child in &node.children {
-            orphaned_ids.push(child.id);
-            Self::collect_orphaned_nodes(child, orphaned_ids);
+        let mut stack = vec![node];
+
+        while let Some(current) = stack.pop() {
+            // Add all children to the result and to the stack for processing
+            for child in &current.children {
+                orphaned_ids.push(child.id);
+                stack.push(child);
+            }
         }
     }
 }
