@@ -331,7 +331,7 @@ impl WalletManager {
         }
 
         if operation.from.default_signer().address() == operation.to.default_signer().address() {
-            self.update_progress(true).await;
+            // self.update_progress(true).await;
             return Ok(());
         }
 
@@ -387,7 +387,12 @@ impl WalletManager {
         let gas = gas_price * U256::from(GAS_LIMIT);
         let gas_buffer = U256::from(self.config.gas_buffer_multiplier);
         if balance < gas_buffer.mul(gas) {
-            warn!("Insufficient balance for gas buffer: {} < {} for wallet: {}.", balance, gas_buffer.mul(gas), wallet.default_signer().address());
+            warn!(
+                "Insufficient balance for gas buffer: {} < {} for wallet: {}.",
+                balance,
+                gas_buffer.mul(gas),
+                wallet.default_signer().address()
+            );
         }
         Ok(balance - gas_buffer.mul(gas))
     }
@@ -424,7 +429,10 @@ impl WalletManager {
             .get_receipt()
             .await
             .map_err(|e| {
-                WalletError::TransactionError(format!("Failed to get transaction receipt: {}", e), None)
+                WalletError::TransactionError(
+                    format!("Failed to get transaction receipt: {}", e),
+                    None,
+                )
             })?;
 
         let duration = start.elapsed();
@@ -445,7 +453,10 @@ impl WalletManager {
         self.log(&format!(
             "TX Value: {}",
             format_units(tx.value.unwrap(), "ether").map_err(|e| {
-                WalletError::TransactionError(format!("Failed to format transaction value: {}", e), None)
+                WalletError::TransactionError(
+                    format!("Failed to format transaction value: {}", e),
+                    None,
+                )
             })?
         ));
         Ok(())
@@ -538,15 +549,18 @@ impl WalletManager {
             self.log(&format!(
                 "Total ETH Stuck: {} ETH (${:.2})",
                 format_units(total_eth_stuck, "ether").map_err(|e| {
-                    WalletError::TransactionError(format!("Failed to format ETH stuck: {}", e), None)
+                    WalletError::TransactionError(
+                        format!("Failed to format ETH stuck: {}", e),
+                        None,
+                    )
                 })?,
                 eth_price
                     * format_units(total_eth_stuck, "ether")
                         .map_err(|e| {
-                            WalletError::TransactionError(format!(
-                                "Failed to format ETH stuck: {}",
-                                e
-                            ), None)
+                            WalletError::TransactionError(
+                                format!("Failed to format ETH stuck: {}", e),
+                                None,
+                            )
                         })?
                         .parse::<f64>()
                         .unwrap()
@@ -574,7 +588,10 @@ impl WalletManager {
             eth_price
                 * format_units(eth_spent, "ether")
                     .map_err(|e| {
-                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
+                        WalletError::TransactionError(
+                            format!("Failed to format ETH spent: {}", e),
+                            None,
+                        )
                     })?
                     .parse::<f64>()
                     .unwrap()
@@ -583,7 +600,10 @@ impl WalletManager {
         let eth_per_wallet = parse_units(
             (format_units(eth_spent, "ether")
                 .map_err(|e| {
-                    WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
+                    WalletError::TransactionError(
+                        format!("Failed to format ETH spent: {}", e),
+                        None,
+                    )
                 })?
                 .parse::<f64>()
                 .unwrap()
@@ -602,7 +622,10 @@ impl WalletManager {
             eth_price
                 * format_units(eth_per_wallet, "ether")
                     .map_err(|e| {
-                        WalletError::TransactionError(format!("Failed to format ETH spent: {}", e), None)
+                        WalletError::TransactionError(
+                            format!("Failed to format ETH spent: {}", e),
+                            None,
+                        )
                     })?
                     .parse::<f64>()
                     .unwrap()
