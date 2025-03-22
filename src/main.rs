@@ -16,7 +16,7 @@ use std::{
 };
 
 use active_address::{
-    operations::generate_split_loops, utils::pretty_print_tree, wallet::WalletManager,
+    operations::{generate_balanced_split_loops, generate_split_loops}, utils::pretty_print_tree, wallet::WalletManager,
 };
 
 #[tokio::main]
@@ -92,7 +92,7 @@ async fn main() -> eyre::Result<()> {
 
     let mut wallet_manager = WalletManager::new(provider).await?;
 
-    let operations_tree = generate_split_loops(
+    let operations_tree = generate_balanced_split_loops(
         root_wallet,
         to_activate,
         split_loops_count,
