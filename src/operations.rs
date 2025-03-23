@@ -108,61 +108,6 @@ pub async fn generate_operation_loop(
     Ok(root)
 }
 
-// /// Generates a parallelizable tree of operations where the first operations create new wallets and each have a loop of children.
-// ///
-// /// # Arguments
-// /// * `first_wallet` - The first wallet to start the tree
-// /// * `total_new_wallets` - The total number of new wallets to create (first layer and all created by children loops)
-// /// * `total_loops` - The number of loops to create
-// /// * `amount_per_wallet` - The amount of ether to send to each new first layer wallet
-// ///
-// /// # Returns
-// /// * `TreeNode<Operation>` - The root node of the built tree
-// pub async fn generate_split_loops(
-//     first_wallet: EthereumWallet,
-//     total_new_wallets: i32,
-//     total_loops: i32,
-//     amount_per_wallet: U256,
-//     backup_dir: &Path,
-// ) -> eyre::Result<TreeNode<Operation>> {
-//     // Calculate how many wallets per loop, putting any remainder in the first loop
-//     let base_wallets_per_loop = (total_new_wallets - total_loops) / total_loops;
-//     let remainder = (total_new_wallets - total_loops) % total_loops;
-//     if base_wallets_per_loop < 1 {
-//         return Err(eyre::eyre!("Not enough wallets to distribute among loops"));
-//     }
-
-//     let mut root = create_dummy_root(&first_wallet);
-//     let mut last_op_node = &mut root;
-
-//     // Create first layer operations (one for each loop)
-//     for loop_index in 0..total_loops {
-//         // Create and attach funding operation
-//         let (funding_op_node, new_wallet) =
-//             create_funding_operation(&first_wallet, amount_per_wallet, backup_dir).await?;
-//         TreeNode::add_child(last_op_node, &funding_op_node);
-//         last_op_node = last_op_node.children.last_mut().unwrap();
-
-//         // Calculate wallets for this loop and attach it
-//         let wallets_for_this_loop = if loop_index == 0 {
-//             base_wallets_per_loop + remainder
-//         } else {
-//             base_wallets_per_loop
-//         };
-
-//         attach_loop_to_parent(
-//             last_op_node,
-//             new_wallet,
-//             wallets_for_this_loop,
-//             first_wallet.clone(),
-//             backup_dir,
-//         )
-//         .await?;
-//     }
-
-//     Ok(root)
-// }
-
 /// Generates a tree of operations where loops are balanced to end at approximately the same depth.
 /// The first operations are sequential (funding from the same wallet) and each has a loop of
 /// decreasing size attached to it, ensuring all paths complete in roughly the same number of steps.
