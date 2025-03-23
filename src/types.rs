@@ -13,6 +13,7 @@ use std::{
 use tokio::time::Duration;
 
 use crate::error::WalletError;
+use crate::tree::TreeNode;
 
 /// Represents an error that occurred during node execution along with the ID of the node
 #[derive(Debug)]
@@ -75,6 +76,8 @@ pub struct ExecutionResult {
     pub time_elapsed: Duration,
     /// List of errors that occurred during execution
     pub errors: Vec<NodeError>,
+    /// Reference to the root node of the operation tree
+    pub root_node: TreeNode<Operation>,
 }
 
 pub struct NodeExecutionResult {
