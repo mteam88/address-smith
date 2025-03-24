@@ -70,7 +70,3 @@ Logs are written to both:
 ## Security Considerations
 
 ⚠️ **Warning**: This library includes plaintext wallet backup functionality which is inherently insecure. Use at your own risk and ensure proper security measures are in place.
-
-## License
-
-[Add your license information here]
