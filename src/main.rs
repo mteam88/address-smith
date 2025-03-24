@@ -5,15 +5,14 @@ use alloy::{
 };
 use alloy_primitives::utils::parse_units;
 use dotenv::dotenv;
-use env_logger::Builder;
-use log::{info, LevelFilter};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::PathBuf,
     sync::Arc,
     time::Duration,
 };
+use tracing::{info, Level};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use active_address::{
     operations::generate_balanced_split_loops, utils::pretty_print_tree, wallet::WalletManager,
@@ -27,36 +26,37 @@ async fn main() -> eyre::Result<()> {
     fs::create_dir_all("logs")?;
 
     // Generate unique log file name with timestamp
-    let log_file_name = format!(
-        "logs/active_address_{}.log",
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    );
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let log_file_name = format!("active_address_{}.log", timestamp);
 
-    // Configure logging to write to both console and file
-    let mut builder = Builder::from_default_env();
-    builder.filter_level(LevelFilter::Info);
+    // Set up file appender for logging
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::NEVER)
+        .filename_prefix(format!("active_address_{}", timestamp))
+        .filename_suffix("log")
+        .build("logs")?;
 
-    // Create log file
-    let log_file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file_name)?;
+    // Initialize tracing subscriber with JSON formatting for file only
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    builder.format(|buf, record| {
-        writeln!(
-            buf,
-            "[{}] {} - {}",
-            record.level(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-            record.args()
+    tracing_subscriber::registry()
+        .with(
+            fmt::Layer::new()
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_line_number(true)
+                .with_file(true)
+                .json()
+                .with_writer(non_blocking),
         )
-    });
+        .with(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
+        .init();
 
-    // Write to both console and file
-    builder.target(env_logger::Target::Pipe(Box::new(log_file)));
-    builder.init();
-
-    info!("Starting new run, logging to: {}", log_file_name);
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        log_file = log_file_name,
+        "Starting active-address execution"
+    );
 
     let provider = Arc::new(
         ProviderBuilder::new()
@@ -64,7 +64,7 @@ async fn main() -> eyre::Result<()> {
             .await?,
     );
     provider.client().set_poll_interval(Duration::from_secs(4));
-    info!("Provider Chain ID: {}", provider.get_chain_id().await?);
+    info!(chain_id = ?provider.get_chain_id().await?, "Connected to provider");
 
     let private_key: String = dotenv::var("PRIVATE_KEY")
         .expect("PRIVATE_KEY must be set in .env")
@@ -90,6 +90,13 @@ async fn main() -> eyre::Result<()> {
     .unwrap()
     .into();
 
+    info!(
+        to_activate,
+        split_loops_count,
+        amount_per_wallet = ?amount_per_wallet,
+        "Configuration loaded"
+    );
+
     let mut wallet_manager = WalletManager::new(provider).await?;
 
     let operations_tree = generate_balanced_split_loops(
@@ -107,5 +114,6 @@ async fn main() -> eyre::Result<()> {
 
     wallet_manager.print_statistics(execution_result).await?;
 
+    info!("Execution completed");
     Ok(())
 }

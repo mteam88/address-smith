@@ -4,8 +4,8 @@ use alloy::{
     providers::Provider,
     rpc::types::TransactionRequest,
 };
-use log::{info, warn};
 use std::{ops::Mul, sync::Arc, time::Duration};
+use tracing::{info, info_span, warn};
 
 use crate::{
     error::{Result, WalletError},
@@ -30,15 +30,22 @@ impl TransactionManager {
 
     /// Gets the balance of a wallet
     pub async fn get_wallet_balance(&self, wallet: &EthereumWallet) -> Result<U256> {
-        self.provider
+        let balance_span = info_span!(
+            "get_balance",
+            address = %wallet.default_signer().address()
+        );
+        let _guard = balance_span.enter();
+
+        let balance = self
+            .provider
             .get_balance(wallet.default_signer().address())
             .await
-            .map_err(|e| WalletError::ProviderError(format!("Failed to get wallet balance: {}", e)))
-    }
+            .map_err(|e| {
+                WalletError::ProviderError(format!("Failed to get wallet balance: {}", e))
+            })?;
 
-    /// Logs a message
-    pub fn log(&self, message: &str) {
-        info!("{}", message);
+        info!(balance = ?format_units(balance, "ether").unwrap_or_default());
+        Ok(balance)
     }
 
     /// Builds a transaction request with current network parameters
@@ -48,6 +55,14 @@ impl TransactionManager {
         to_address: alloy::primitives::Address,
         value: Option<U256>,
     ) -> Result<TransactionRequest> {
+        let build_span = info_span!(
+            "build_transaction",
+            from = %from_wallet.default_signer().address(),
+            to = %to_address,
+            value = ?value.map(|v| format_units(v, "ether").unwrap_or_default()),
+        );
+        let _guard = build_span.enter();
+
         let gas_price =
             U256::from(self.provider.get_gas_price().await.map_err(|e| {
                 WalletError::ProviderError(format!("Failed to get gas price: {}", e))
@@ -87,6 +102,14 @@ impl TransactionManager {
             max_value
         };
 
+        info!(
+            gas_price = ?format_units(gas_price, "gwei").unwrap_or_default(),
+            nonce,
+            chain_id,
+            final_value = ?format_units(value, "ether").unwrap_or_default(),
+            "Transaction parameters prepared"
+        );
+
         Ok(TransactionRequest::default()
             .with_from(from_wallet.default_signer().address())
             .with_to(to_address)
@@ -103,6 +126,13 @@ impl TransactionManager {
         wallet: &EthereumWallet,
         gas_price: U256,
     ) -> Result<U256> {
+        let calc_span = info_span!(
+            "calculate_max_value",
+            address = %wallet.default_signer().address(),
+            gas_price = ?format_units(gas_price, "gwei").unwrap_or_default(),
+        );
+        let _guard = calc_span.enter();
+
         let balance = self.get_wallet_balance(wallet).await?;
         let gas = gas_price * U256::from(GAS_LIMIT);
         let gas_buffer = U256::from(self.config.gas_buffer_multiplier);
@@ -110,17 +140,20 @@ impl TransactionManager {
 
         if balance < total_gas_cost {
             warn!(
-                "Insufficient balance for gas buffer: {} < {} for wallet: {}.",
-                balance,
-                total_gas_cost,
-                wallet.default_signer().address()
+                balance = ?format_units(balance, "ether").unwrap_or_default(),
+                required = ?format_units(total_gas_cost, "ether").unwrap_or_default(),
+                address = %wallet.default_signer().address(),
+                "Insufficient balance for gas buffer"
             );
-            // Return zero when balance is insufficient instead of throwing an error
-            // The calling function will handle this appropriately
             return Ok(U256::ZERO);
         }
 
-        Ok(balance - total_gas_cost)
+        let max_value = balance - total_gas_cost;
+        info!(
+            max_value = ?format_units(max_value, "ether").unwrap_or_default(),
+            "Maximum sendable value calculated"
+        );
+        Ok(max_value)
     }
 
     /// Sends a transaction without retry logic
@@ -129,6 +162,14 @@ impl TransactionManager {
         tx: TransactionRequest,
         wallet: EthereumWallet,
     ) -> Result<()> {
+        let send_span = info_span!(
+            "send_transaction",
+            from = %wallet.default_signer().address(),
+            value = ?format_units(tx.value.unwrap(), "ether").unwrap_or_default(),
+            nonce = tx.nonce.unwrap(),
+        );
+        let _guard = send_span.enter();
+
         // slight random delay to avoid hitting rate limits
         let random_delay = Duration::from_millis(rand::random_range(0..2000));
         tokio::time::sleep(random_delay).await;
@@ -142,32 +183,27 @@ impl TransactionManager {
         tx: &TransactionRequest,
         wallet: &EthereumWallet,
     ) -> Result<()> {
+        let attempt_span = info_span!(
+            "attempt_transaction",
+            from = %wallet.default_signer().address(),
+            value = ?format_units(tx.value.unwrap(), "ether").unwrap_or_default(),
+            nonce = tx.nonce.unwrap(),
+        );
+        let _guard = attempt_span.enter();
+
         let tx_envelope = tx.clone().build(wallet).await.map_err(|e| {
             WalletError::TransactionError(format!("Failed to build transaction: {}", e), None)
         })?;
 
-        // Safely calculate total gas cost without direct multiplication that could overflow
-        let value_str = format_units(tx.value.unwrap(), "ether").map_err(|e| {
-            WalletError::TransactionError(
-                format!("Failed to format transaction value: {}", e),
-                None,
-            )
-        })?;
-
-        let gas_price_str = format!("{}", tx.gas_price.unwrap());
-
-        self.log(&format!(
-            "Sending transaction... Value: {} ETH, Gas Price: {} wei, Gas Limit: {}, Hash: {}",
-            value_str,
-            gas_price_str,
-            GAS_LIMIT,
-            tx_envelope.hash()
-        ));
+        info!(
+            tx_hash = %tx_envelope.hash(),
+            "Transaction envelope built"
+        );
 
         let start = tokio::time::Instant::now();
         let receipt = self
             .provider
-            .send_tx_envelope(tx_envelope)
+            .send_tx_envelope(tx_envelope.clone())
             .await
             .map_err(|e| {
                 WalletError::TransactionError(format!("Failed to send transaction: {}", e), None)
@@ -183,36 +219,34 @@ impl TransactionManager {
 
         let duration = start.elapsed();
 
-        self.log_transaction_success(tx, receipt.transaction_hash, duration)?;
-        Ok(())
-    }
+        info!(
+            tx_hash = %receipt.transaction_hash,
+            duration = ?duration,
+            status = ?receipt.status(),
+            "Transaction confirmed"
+        );
 
-    /// Logs successful transaction details
-    fn log_transaction_success(
-        &self,
-        tx: &TransactionRequest,
-        hash: alloy::primitives::TxHash,
-        duration: Duration,
-    ) -> Result<()> {
-        self.log(&format!(
-            "Transaction Landed! Time elapsed: {:?} | TX Hash: {} | TX Value: {}",
-            duration,
-            hash,
-            format_units(tx.value.unwrap(), "ether").map_err(|e| WalletError::TransactionError(
-                format!("Failed to format transaction value: {}", e),
-                None
-            ))?
-        ));
         Ok(())
     }
 
     /// Builds and sends an operation with retry logic, rebuilding transaction on each attempt
     pub async fn build_and_send_operation(&self, operation: &Operation) -> Result<()> {
+        let op_span = info_span!(
+            "operation",
+            from = %operation.from.default_signer().address(),
+            to = %operation.to.default_signer().address(),
+            amount = ?operation.amount.map(|a| format_units(a, "ether").unwrap_or_default()),
+        );
+        let _guard = op_span.enter();
+
         let mut retry_count = 0;
         let max_retries = self.config.max_retries;
         let base_delay = Duration::from_millis(self.config.retry_base_delay_ms);
 
         loop {
+            let attempt_span = info_span!("attempt", retry_count);
+            let _attempt_guard = attempt_span.enter();
+
             // Rebuild transaction from scratch on each attempt
             let tx_result = self
                 .build_transaction(
@@ -230,29 +264,42 @@ impl TransactionManager {
                         Err(e) => {
                             // if e is transaction error, we must check if the transaction actually did land
                             if let WalletError::TransactionError(_, Some(hash)) = e {
-                                // warn log
                                 warn!(
-                                    "Transaction failed, waiting 10 seconds before checking if it landed"
+                                    tx_hash = %hash,
+                                    "Transaction failed, checking if it landed"
                                 );
                                 // let rpc think
                                 tokio::time::sleep(Duration::from_secs(10)).await;
                                 let receipt = self.provider.get_transaction_receipt(hash).await;
                                 if let Ok(Some(receipt)) = receipt {
                                     if receipt.status() {
+                                        info!(
+                                            tx_hash = %hash,
+                                            "Transaction succeeded despite error"
+                                        );
                                         return Ok(());
                                     }
                                 }
                             }
 
                             if retry_count >= max_retries {
+                                warn!(
+                                    error = %e,
+                                    retry_count,
+                                    max_retries,
+                                    "Max retries reached"
+                                );
                                 return Err(e);
                             }
                             retry_count += 1;
                             let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
 
                             warn!(
-                                "Transaction failed (attempt {}/{}), rebuilding and retrying in {:?}: {}",
-                                retry_count, max_retries, delay, e
+                                error = %e,
+                                retry_count,
+                                max_retries,
+                                ?delay,
+                                "Retrying transaction"
                             );
 
                             tokio::time::sleep(delay).await;
@@ -263,14 +310,23 @@ impl TransactionManager {
                     // For InsufficientBalance, retry after waiting for more funds to arrive
                     if let WalletError::InsufficientBalance(msg) = &e {
                         if retry_count >= max_retries {
+                            warn!(
+                                error = %e,
+                                retry_count,
+                                max_retries,
+                                "Max retries reached"
+                            );
                             return Err(e);
                         }
                         retry_count += 1;
                         let delay = base_delay.mul_f32(1.5f32.powi(retry_count as i32));
 
                         warn!(
-                            "Insufficient balance (attempt {}/{}), retrying in {:?}: {}",
-                            retry_count, max_retries, delay, msg
+                            error = %msg,
+                            retry_count,
+                            max_retries,
+                            ?delay,
+                            "Insufficient balance, retrying"
                         );
 
                         tokio::time::sleep(delay).await;
@@ -284,18 +340,14 @@ impl TransactionManager {
     }
 
     /// Analyzes the impact of a failed operation
-    ///
-    /// # Arguments
-    /// * `node_id` - ID of the failed node
-    /// * `root_node` - Reference to the root operation node
-    ///
-    /// # Returns
-    /// * `Result<FailureImpact>` - Analysis of the failure's impact
     pub async fn analyze_failure_impact(
         &self,
         node_id: usize,
         root_node: &TreeNode<Operation>,
     ) -> Result<FailureImpact> {
+        let analyze_span = info_span!("analyze_failure", node_id);
+        let _guard = analyze_span.enter();
+
         // Find the failed node
         let failed_node = root_node.find_node_by_id(node_id).ok_or_else(|| {
             WalletError::WalletOperationError(format!("Node with ID {} not found", node_id))
@@ -312,6 +364,13 @@ impl TransactionManager {
         let mut orphaned_node_ids = Vec::new();
         Self::collect_orphaned_nodes(failed_node, &mut orphaned_node_ids);
 
+        info!(
+            eth_stuck = ?format_units(eth_stuck, "ether").unwrap_or_default(),
+            stuck_address = %stuck_address,
+            orphaned_operations = orphaned_node_ids.len(),
+            "Failure impact analyzed"
+        );
+
         Ok(FailureImpact {
             failed_node_id: node_id,
             eth_stuck,
@@ -326,7 +385,6 @@ impl TransactionManager {
         let mut stack = vec![node];
 
         while let Some(current) = stack.pop() {
-            // Add all children to the result and to the stack for processing
             for child in &current.children {
                 orphaned_ids.push(child.id);
                 stack.push(child);

@@ -11,9 +11,15 @@ use std::{
     fmt::{Debug, Display},
 };
 use tokio::time::Duration;
+use tracing::{span, Level, Span};
 
 use crate::error::WalletError;
 use crate::tree::TreeNode;
+
+/// Helper trait for recording fields in tracing spans
+pub trait RecordFields {
+    fn record_fields(&self) -> Vec<(&'static str, String)>;
+}
 
 /// Represents an error that occurred during node execution along with the ID of the node
 #[derive(Debug)]
@@ -22,6 +28,15 @@ pub struct NodeError {
     pub node_id: usize,
     /// The error that occurred
     pub error: WalletError,
+}
+
+impl RecordFields for NodeError {
+    fn record_fields(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("node_id", self.node_id.to_string()),
+            ("error", self.error.to_string()),
+        ]
+    }
 }
 
 /// Represents a single transfer operation between two wallets.
@@ -34,6 +49,24 @@ pub struct Operation {
     pub to: EthereumWallet,
     /// If None, the operation will send all available funds minus a gas buffer
     pub amount: Option<U256>,
+}
+
+impl RecordFields for Operation {
+    fn record_fields(&self) -> Vec<(&'static str, String)> {
+        let mut fields = vec![
+            ("from", self.from.default_signer().address().to_string()),
+            ("to", self.to.default_signer().address().to_string()),
+        ];
+
+        if let Some(amount) = self.amount {
+            if let Ok(eth_amount) = format_units(amount, "ether") {
+                fields.push(("amount_eth", eth_amount));
+            }
+            fields.push(("amount_wei", amount.to_string()));
+        }
+
+        fields
+    }
 }
 
 impl Display for Operation {
@@ -59,6 +92,19 @@ impl Display for Operation {
             write!(f, "NOOP")
         }
     }
+}
+
+/// Creates a new tracing span for an operation
+pub fn create_operation_span(operation: &Operation, node_id: usize) -> Span {
+    let span = span!(
+        Level::INFO,
+        "operation",
+        node_id = node_id,
+        from = %operation.from.default_signer().address(),
+        to = %operation.to.default_signer().address(),
+        amount = ?operation.amount.map(|a| format_units(a, "ether").unwrap_or_default()),
+    );
+    span
 }
 
 /// Result of executing a series of wallet operations.
@@ -100,6 +146,21 @@ pub struct FailureImpact {
     pub orphaned_node_ids: Vec<usize>,
 }
 
+impl RecordFields for FailureImpact {
+    fn record_fields(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("failed_node_id", self.failed_node_id.to_string()),
+            (
+                "eth_stuck",
+                format_units(self.eth_stuck, "ether").unwrap_or_default(),
+            ),
+            ("stuck_address", self.stuck_address.to_string()),
+            ("orphaned_operations", self.orphaned_operations.to_string()),
+            ("orphaned_node_ids", format!("{:?}", self.orphaned_node_ids)),
+        ]
+    }
+}
+
 impl Display for FailureImpact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -136,6 +197,31 @@ pub struct ProgressStats {
     pub recent_operations: Vec<std::time::Instant>,
 }
 
+impl RecordFields for ProgressStats {
+    fn record_fields(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("total_operations", self.total_operations.to_string()),
+            (
+                "completed_operations",
+                self.completed_operations.to_string(),
+            ),
+            (
+                "successful_operations",
+                self.successful_operations.to_string(),
+            ),
+            (
+                "current_gas_price_gwei",
+                format_units(self.current_gas_price, "gwei").unwrap_or_default(),
+            ),
+            ("success_rate", format!("{:.2}%", self.success_rate())),
+            (
+                "operations_per_minute",
+                format!("{:.2}", self.operations_per_minute()),
+            ),
+        ]
+    }
+}
+
 impl ProgressStats {
     pub fn new(total_operations: usize) -> Self {
         Self {
@@ -156,29 +242,36 @@ impl ProgressStats {
         }
     }
 
-    pub fn operations_per_minute(&mut self) -> f64 {
+    pub fn operations_per_minute(&self) -> f64 {
         let now = std::time::Instant::now();
         let one_minute_ago = now - std::time::Duration::from_secs(60);
 
-        // Remove operations older than 1 minute
-        self.recent_operations.retain(|&time| time > one_minute_ago);
+        // Count operations in the last minute
+        let recent_count = self
+            .recent_operations
+            .iter()
+            .filter(|&&time| time > one_minute_ago)
+            .count();
 
-        // Add current operation
-        self.recent_operations.push(now);
-
-        // Calculate ops per minute
-        if self.recent_operations.len() <= 1 {
+        if recent_count <= 1 {
             0.0
         } else {
-            let window_duration = now - self.recent_operations[0];
+            let oldest_recent = self
+                .recent_operations
+                .iter()
+                .filter(|&&time| time > one_minute_ago)
+                .min()
+                .copied()
+                .unwrap_or(now);
+
+            let window_duration = now - oldest_recent;
 
             // Ensure we don't divide by a very small duration
-            // Using a threshold of 1 millisecond
             if window_duration.as_secs_f64() < 0.001 {
-                return 0.0; // Return zero if timing window is too small
+                0.0
+            } else {
+                (recent_count as f64) / window_duration.as_secs_f64() * 60.0
             }
-
-            (self.recent_operations.len() as f64) / window_duration.as_secs_f64() * 60.0
         }
     }
 

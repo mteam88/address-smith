@@ -1,15 +1,19 @@
+use alloy_primitives::utils::format_units;
 use futures::future;
-use log::info;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::{info, info_span, warn};
 
 use crate::{
     error::{Result, WalletError},
     tree::TreeNode,
-    types::{ExecutionResult, NodeError, NodeExecutionResult, Operation, ProgressStats},
+    types::{
+        create_operation_span, ExecutionResult, NodeError, NodeExecutionResult, Operation,
+        ProgressStats,
+    },
 };
 
 use super::{progress::ProgressManager, transaction::TransactionManager, Config};
@@ -31,17 +35,16 @@ impl ExecutionManager {
         Self { provider, progress }
     }
 
-    /// Logs a message
-    fn log(&self, message: &str) {
-        info!("{}", message);
-    }
-
     /// Executes operations in parallel, ensuring parent operations complete before children
     pub async fn parallel_execute_operations(
         &self,
         root_node: TreeNode<Operation>,
         transaction_manager: &TransactionManager,
     ) -> Result<ExecutionResult> {
+        let execution_span =
+            info_span!("execution", root_wallet = %root_node.value.from.default_signer().address());
+        let _guard = execution_span.enter();
+
         let start_time = tokio::time::Instant::now();
         let progress_manager = ProgressManager::new(self.progress.clone());
 
@@ -49,8 +52,15 @@ impl ExecutionManager {
         let total_operations = Self::count_total_operations(&root_node);
         *self.progress.write().await = ProgressStats::new(total_operations);
 
+        info!(total_operations, "Starting parallel execution");
+
         let root_wallet = root_node.value.from.clone();
         let initial_balance = transaction_manager.get_wallet_balance(&root_wallet).await?;
+
+        info!(
+            initial_balance = ?initial_balance,
+            "Initial balance retrieved"
+        );
 
         // Execute all operations in the tree using the task queue approach
         let node_result = self
@@ -62,6 +72,14 @@ impl ExecutionManager {
             .await?;
 
         let final_balance = transaction_manager.get_wallet_balance(&root_wallet).await?;
+
+        info!(
+            final_balance = ?final_balance,
+            new_wallets = node_result.new_wallets.len(),
+            errors = node_result.errors.len(),
+            duration = ?start_time.elapsed(),
+            "Execution completed"
+        );
 
         Ok(ExecutionResult {
             new_wallets_count: node_result.new_wallets.len() as i32,
@@ -80,13 +98,8 @@ impl ExecutionManager {
         let mut stack = vec![node];
 
         while let Some(current) = stack.pop() {
-            // Count the current node
             count += 1;
-
-            // Add all children to the stack
-            for child in &current.children {
-                stack.push(child);
-            }
+            stack.extend(current.children.iter());
         }
 
         count
@@ -100,6 +113,9 @@ impl ExecutionManager {
         transaction_manager: &TransactionManager,
         progress_manager: &ProgressManager,
     ) -> Result<NodeExecutionResult> {
+        let task_queue_span = info_span!("task_queue");
+        let _guard = task_queue_span.enter();
+
         // Store tasks and their state
         #[derive(Clone)]
         struct Task {
@@ -120,6 +136,8 @@ impl ExecutionManager {
             is_executed: false,
         });
 
+        info!(queue_size = 1, "Task queue initialized");
+
         // Process tasks until the queue is empty
         while !queue.is_empty() {
             // Identify all tasks that are ready to execute in parallel
@@ -128,23 +146,24 @@ impl ExecutionManager {
 
             // Sort tasks into ready and pending
             while let Some(task) = queue.pop_front() {
-                // Check if the task is ready to execute (root or parent has been executed)
                 let parent_executed = task
                     .parent_id
                     .map(|id| task_map.get(&id).map(|t| t.is_executed).unwrap_or(false))
-                    .unwrap_or(true); // Root has no parent, so it's ready
+                    .unwrap_or(true);
 
                 if !task.is_executed && parent_executed {
-                    // This task is ready to be executed
                     ready_tasks.push(task);
                 } else {
-                    // This task must wait - add it back to the pending queue
                     pending_tasks.push_back(task);
                 }
             }
 
             // If we found no ready tasks but still have pending tasks, we have a dependency cycle
             if ready_tasks.is_empty() && !pending_tasks.is_empty() {
+                warn!(
+                    pending_tasks = pending_tasks.len(),
+                    "Dependency cycle detected"
+                );
                 return Err(WalletError::WalletOperationError(
                     "Dependency cycle detected in operations".to_string(),
                 ));
@@ -152,6 +171,8 @@ impl ExecutionManager {
 
             // Process all ready tasks in parallel
             if !ready_tasks.is_empty() {
+                info!(ready_tasks = ready_tasks.len(), "Processing batch of tasks");
+
                 // Create a future for each ready task
                 let futures = ready_tasks
                     .iter()
@@ -159,20 +180,29 @@ impl ExecutionManager {
                         let node = task.node.clone();
                         let mut task_new_wallets = HashSet::new();
                         let transaction_manager = &transaction_manager;
+                        let operation_span = create_operation_span(&node.value, node.id);
 
                         async move {
-                            let operation = node.value.clone();
+                            let _guard = operation_span.enter();
+
+                            info!("Starting operation execution");
 
                             // Execute the operation
                             let result = self
                                 .process_single_operation(
-                                    &operation,
+                                    &node.value,
                                     &mut task_new_wallets,
                                     transaction_manager,
                                 )
                                 .await;
 
-                            // Return a tuple of (node, result, task_new_wallets) to process after all parallel tasks complete
+                            if let Err(ref e) = result {
+                                warn!(error = %e, "Operation failed");
+                            } else {
+                                info!("Operation completed successfully");
+                            }
+
+                            // Return execution results
                             (node, result, task_new_wallets, task.clone())
                         }
                     })
@@ -184,9 +214,6 @@ impl ExecutionManager {
                 // Process results and mark tasks as completed
                 for (node, result, task_new_wallets, mut task) in results {
                     let success = result.is_ok();
-
-                    // Log the operation
-                    self.log(&format!("Executing operation: {}", node.value));
 
                     // Update progress stats
                     progress_manager
@@ -225,6 +252,12 @@ impl ExecutionManager {
             queue = pending_tasks;
         }
 
+        info!(
+            new_wallets = new_wallets.len(),
+            errors = errors.len(),
+            "Task queue processing completed"
+        );
+
         Ok(NodeExecutionResult {
             new_wallets,
             errors,
@@ -238,6 +271,14 @@ impl ExecutionManager {
         new_wallets: &mut HashSet<alloy::primitives::Address>,
         transaction_manager: &TransactionManager,
     ) -> Result<()> {
+        let operation_span = info_span!(
+            "process_operation",
+            from = %operation.from.default_signer().address(),
+            to = %operation.to.default_signer().address(),
+            amount = ?operation.amount.map(|a| format_units(a, "ether").unwrap_or_default()),
+        );
+        let _guard = operation_span.enter();
+
         let tx_count = self
             .provider
             .get_transaction_count(operation.from.default_signer().address())
@@ -247,10 +288,15 @@ impl ExecutionManager {
             })?;
 
         if tx_count == 0 {
+            info!(
+                address = %operation.from.default_signer().address(),
+                "New wallet detected"
+            );
             new_wallets.insert(operation.from.default_signer().address());
         }
 
         if operation.from.default_signer().address() == operation.to.default_signer().address() {
+            info!("Skipping self-transfer operation");
             return Ok(());
         }
 

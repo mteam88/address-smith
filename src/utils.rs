@@ -13,7 +13,7 @@ use crate::{
 };
 use alloy::{network::EthereumWallet, signers::local::PrivateKeySigner};
 use dotenv::dotenv;
-use log::info;
+use tracing::{info, info_span};
 
 /// Standard gas limit for basic ETH transfer transactions
 pub const GAS_LIMIT: u64 = 21000;
@@ -42,11 +42,17 @@ pub fn get_gas_buffer_multiplier() -> Result<u64> {
 /// * `Result<EthereumWallet>` - A new wallet instance or an error if generation fails
 pub async fn generate_wallet(backup_dir: &Path) -> Result<EthereumWallet> {
     let signer = PrivateKeySigner::random();
+    let address = signer.address();
+
+    let backup_span = info_span!("backup_wallet", address = %address);
+    let _guard = backup_span.enter();
 
     // backup private key to file
-    let backup_path = backup_dir.join(format!("backup_wallet_{}.txt", signer.address()));
-    std::fs::write(backup_path, signer.to_bytes().to_string())
+    let backup_path = backup_dir.join(format!("backup_wallet_{}.txt", address));
+    std::fs::write(backup_path.clone(), signer.to_bytes().to_string())
         .map_err(|e| WalletError::ProviderError(format!("Failed to backup private key: {}", e)))?;
+
+    info!(backup_path = ?backup_path, "Wallet backup created");
 
     let wallet = EthereumWallet::new(signer);
     Ok(wallet)
@@ -57,6 +63,9 @@ pub async fn generate_wallet(backup_dir: &Path) -> Result<EthereumWallet> {
 /// # Returns
 /// * `Result<f64>` - The current ETH price in USD or an error if the fetch fails
 pub async fn get_eth_price() -> Result<f64> {
+    let price_span = info_span!("fetch_eth_price");
+    let _guard = price_span.enter();
+
     let response = reqwest::get("https://api.coinbase.com/v2/prices/ETH-USD/spot")
         .await
         .map_err(|e| WalletError::ProviderError(format!("Failed to fetch ETH price: {}", e)))?;
@@ -69,11 +78,14 @@ pub async fn get_eth_price() -> Result<f64> {
     let parsed: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| WalletError::ProviderError(format!("Failed to parse response: {}", e)))?;
 
-    parsed["data"]["amount"]
+    let price = parsed["data"]["amount"]
         .as_str()
         .ok_or_else(|| WalletError::ProviderError("Missing price data in response".to_string()))?
         .parse::<f64>()
-        .map_err(|e| WalletError::ProviderError(format!("Failed to parse price value: {}", e)))
+        .map_err(|e| WalletError::ProviderError(format!("Failed to parse price value: {}", e)))?;
+
+    info!(price = price, "ETH price fetched");
+    Ok(price)
 }
 
 /// Pretty prints a tree of operations, showing the hierarchy with indentation.
@@ -82,14 +94,21 @@ pub async fn get_eth_price() -> Result<f64> {
 /// # Arguments
 /// * `tree` - The root node of the operation tree to print
 pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
+    let tree_span = info_span!("operation_tree");
+    let _guard = tree_span.enter();
+
     // Stack holds (node, depth) pairs
     let mut stack = vec![(tree, 0)];
 
     // Process stack until empty
     while let Some((node, depth)) = stack.pop() {
-        // Print the current node
-        let indent = " | ".repeat(depth);
-        info!("{}Node {}: Operation: {}", indent, node.id, node.value);
+        info!(
+            node_id = node.id,
+            depth = depth,
+            from = %node.value.from.default_signer().address(),
+            to = %node.value.to.default_signer().address(),
+            "Tree node"
+        );
 
         // Add children to the stack in reverse order (so they print in correct order)
         for child in node.children.iter().rev() {
