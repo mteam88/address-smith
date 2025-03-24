@@ -18,11 +18,28 @@ use std::{io::BufReader, marker::PhantomData, num::NonZero, path::PathBuf, sync:
 
 /// A provider layer that caches RPC responses and serves them on subsequent requests.
 ///
-/// In order to initialize the caching layer, the path to the cache file is provided along with the
-/// max number of items that are stored in the in-memory LRU cache.
+/// This layer implements a caching strategy for Ethereum RPC calls to:
+/// 1. Reduce RPC load and improve performance
+/// 2. Handle rate limiting gracefully
+/// 3. Cache responses with configurable TTL
+/// 4. Support both in-memory and file-based caching
 ///
-/// One can load the cache from the file system by calling `load_cache` and save the cache to the
-/// file system by calling `save_cache`.
+/// The cache is particularly useful for:
+/// - Gas price queries that don't need real-time accuracy
+/// - Block data that rarely changes
+/// - Transaction receipts that are immutable
+///
+/// # Arguments
+/// * `max_items` - Maximum number of items to store in the LRU cache
+///
+/// # Example
+/// ```rust
+/// let cache = CacheLayer::new(1000);
+/// let provider = ProviderBuilder::new()
+///     .layer(cache)
+///     .connect("https://eth-mainnet.alchemyapi.io/v2/your-api-key")
+///     .await?;
+/// ```
 #[derive(Debug, Clone)]
 pub struct CacheLayer {
     /// In-memory LRU cache, mapping requests to responses.
@@ -65,16 +82,37 @@ where
 /// from the [`Provider`] trait. It attempts to fetch from the cache and falls back to
 /// the RPC in case of a cache miss.
 ///
-/// Most importantly, the [`CacheProvider`] adds `save_cache` and `load_cache` methods
-/// to the provider interface, allowing users to save the cache to disk and load it
-/// from there on demand.
+/// This provider implements caching for various Ethereum RPC methods:
+/// - `eth_getGasPrice`
+/// - `eth_getBlockReceipts`
+/// - `eth_getCode`
+/// - `eth_getLogs`
+/// - `eth_getProof`
+/// - `eth_getStorageAt`
+/// - `eth_getTransactionByHash`
+/// - `eth_getTransactionReceipt`
+///
+/// The provider maintains a balance between:
+/// - Cache freshness (using TTL for time-sensitive data)
+/// - Cache size (using LRU eviction)
+/// - Cache persistence (supporting file-based storage)
+///
+/// # Type Parameters
+/// * `P` - The inner provider type
+/// * `N` - The network type (e.g., Ethereum)
+///
+/// # Example
+/// ```rust
+/// let provider = CacheProvider::new(inner_provider, shared_cache);
+/// let gas_price = provider.get_gas_price().await?;
+/// ```
 #[derive(Debug, Clone)]
 pub struct CacheProvider<P, N> {
     /// Inner provider.
     inner: P,
     /// In-memory LRU cache, mapping requests to responses.
     cache: SharedCache,
-    /// Phantom data
+    /// Phantom data for network type
     _pd: PhantomData<N>,
 }
 
@@ -383,7 +421,8 @@ where
             let result: U128 = {
                 req.params();
                 client.request(req.method(), ())
-            }.await?;
+            }
+            .await?;
 
             // On success, store it in the cache with timestamp
             if let Some(hash) = params_hash {

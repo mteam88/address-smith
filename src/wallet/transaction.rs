@@ -133,10 +133,7 @@ impl TransactionManager {
     }
 
     /// Sends a transaction without retry logic
-    pub async fn send_transaction(
-        &self,
-        tx: TransactionRequest,
-    ) -> Result<()> {
+    pub async fn send_transaction(&self, tx: TransactionRequest) -> Result<()> {
         let send_span = info_span!(
             "send_transaction",
             from = %tx.from.unwrap().to_string(),
@@ -192,11 +189,26 @@ impl TransactionManager {
         Ok(())
     }
 
-    /// Builds and sends an operation with retry logic, rebuilding transaction on each attempt
-    pub async fn build_and_send_operation(
-        &self,
-        operation: &Operation,
-    ) -> Result<()> {
+    /// Builds and sends an operation with retry logic, rebuilding transaction on each attempt.
+    ///
+    /// This function implements a robust retry mechanism for transaction sending:
+    /// 1. Builds a new transaction with current network parameters
+    /// 2. Attempts to send the transaction
+    /// 3. On failure, implements exponential backoff and retries up to max_retries
+    /// 4. Verifies transaction receipt even if initial send fails
+    /// 5. Handles special cases like insufficient balance and transaction errors
+    ///
+    /// # Arguments
+    /// * `operation` - The operation to execute
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error with details
+    ///
+    /// # Errors
+    /// * `WalletError::InsufficientBalance` - When wallet has insufficient funds
+    /// * `WalletError::TransactionError` - When transaction fails after all retries
+    /// * `WalletError::ProviderError` - When RPC communication fails
+    pub async fn build_and_send_operation(&self, operation: &Operation) -> Result<()> {
         let op_span = info_span!(
             "operation",
             from = %operation.from,

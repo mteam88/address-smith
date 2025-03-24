@@ -54,7 +54,9 @@ impl ExecutionManager {
         info!(total_operations, "Starting parallel execution");
 
         let root_address = root_node.value.from;
-        let initial_balance = transaction_manager.get_wallet_balance(&root_address).await?;
+        let initial_balance = transaction_manager
+            .get_wallet_balance(&root_address)
+            .await?;
 
         info!(
             initial_balance = ?initial_balance,
@@ -82,7 +84,9 @@ impl ExecutionManager {
         // Abort the progress update task
         progress_handle.abort();
 
-        let final_balance = transaction_manager.get_wallet_balance(&root_address).await?;
+        let final_balance = transaction_manager
+            .get_wallet_balance(&root_address)
+            .await?;
 
         info!(
             final_balance = ?final_balance,
@@ -117,7 +121,31 @@ impl ExecutionManager {
     }
 
     /// Executes operations using a task queue approach to avoid recursion stack overflow
-    /// while maintaining parallel execution of sibling operations
+    /// while maintaining parallel execution of sibling operations.
+    ///
+    /// This function implements a sophisticated execution strategy:
+    /// 1. Uses a task queue to manage operation dependencies
+    /// 2. Identifies operations that can be executed in parallel
+    /// 3. Maintains parent-child relationships to ensure proper execution order
+    /// 4. Detects and handles dependency cycles
+    /// 5. Collects execution results and errors
+    ///
+    /// The task queue approach is used instead of recursion to:
+    /// - Avoid stack overflow with deep operation trees
+    /// - Enable better control over parallel execution
+    /// - Allow for more efficient memory usage
+    ///
+    /// # Arguments
+    /// * `root_node` - The root node of the operation tree
+    /// * `transaction_manager` - Manager for transaction operations
+    /// * `progress_manager` - Manager for tracking execution progress
+    ///
+    /// # Returns
+    /// * `Result<NodeExecutionResult>` - Execution results including new wallets and errors
+    ///
+    /// # Errors
+    /// * `WalletError::WalletOperationError` - When dependency cycle is detected
+    /// * Other errors from transaction execution
     async fn execute_operations_with_task_queue(
         &self,
         root_node: TreeNode<Operation>,
