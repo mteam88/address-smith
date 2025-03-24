@@ -62,6 +62,15 @@ impl ExecutionManager {
             "Initial balance retrieved"
         );
 
+        // Spawn a task to print progress updates every 5 seconds
+        let progress_clone = progress_manager.clone();
+        let progress_handle = tokio::spawn(async move {
+            loop {
+                progress_clone.print_status_if_needed().await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        });
+
         // Execute all operations in the tree using the task queue approach
         let node_result = self
             .execute_operations_with_task_queue(
@@ -70,6 +79,9 @@ impl ExecutionManager {
                 &progress_manager,
             )
             .await?;
+
+        // Abort the progress update task
+        progress_handle.abort();
 
         let final_balance = transaction_manager.get_wallet_balance(&root_wallet).await?;
 

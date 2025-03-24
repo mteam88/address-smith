@@ -6,7 +6,7 @@ use alloy::{
 use alloy_primitives::utils::parse_units;
 use dotenv::dotenv;
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self},
     path::PathBuf,
     sync::Arc,
     time::Duration,
