@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { version = "0.12.6", features = ["providers", "network", "rpc"] }
+alloy = { version = "0.12.6", features = ["full"] }
+alloy-json-rpc = "0.12.6"
+alloy-rpc-types = "0.12.6"
+alloy-transport = "0.12.6"
+lru = "0.13"
+parking_lot = "0.12.3"
 alloy-primitives = "0.8.23"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
 env_logger = "0.10"
 eyre = "0.6"
@@ -19,3 +24,6 @@ reqwest = "0.11"
 serde_json = "1.0"
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1.88"
+serde = { version = "1.0.219", features = ["derive"] }
+humantime = "2.2.0"

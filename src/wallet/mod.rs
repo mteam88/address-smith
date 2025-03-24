@@ -3,8 +3,8 @@ pub mod progress;
 pub mod transaction;
 
 use alloy::{
-    network::{Ethereum, EthereumWallet},
-    primitives::U256,
+    network::Ethereum,
+    primitives::{Address, U256},
     providers::Provider,
 };
 use std::sync::Arc;
@@ -107,8 +107,8 @@ impl WalletManager {
     }
 
     /// Gets the balance of a wallet
-    pub async fn get_wallet_balance(&self, wallet: &EthereumWallet) -> Result<U256> {
-        self.transaction_manager.get_wallet_balance(wallet).await
+    pub async fn get_wallet_balance(&self, address: &Address) -> Result<U256> {
+        self.transaction_manager.get_wallet_balance(address).await
     }
 
     /// Executes operations in parallel, ensuring parent operations complete before children

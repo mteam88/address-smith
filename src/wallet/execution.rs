@@ -41,8 +41,7 @@ impl ExecutionManager {
         root_node: TreeNode<Operation>,
         transaction_manager: &TransactionManager,
     ) -> Result<ExecutionResult> {
-        let execution_span =
-            info_span!("execution", root_wallet = %root_node.value.from.default_signer().address());
+        let execution_span = info_span!("execution", root_address = %root_node.value.from);
         let _guard = execution_span.enter();
 
         let start_time = tokio::time::Instant::now();
@@ -54,8 +53,8 @@ impl ExecutionManager {
 
         info!(total_operations, "Starting parallel execution");
 
-        let root_wallet = root_node.value.from.clone();
-        let initial_balance = transaction_manager.get_wallet_balance(&root_wallet).await?;
+        let root_address = root_node.value.from;
+        let initial_balance = transaction_manager.get_wallet_balance(&root_address).await?;
 
         info!(
             initial_balance = ?initial_balance,
@@ -83,7 +82,7 @@ impl ExecutionManager {
         // Abort the progress update task
         progress_handle.abort();
 
-        let final_balance = transaction_manager.get_wallet_balance(&root_wallet).await?;
+        let final_balance = transaction_manager.get_wallet_balance(&root_address).await?;
 
         info!(
             final_balance = ?final_balance,
@@ -97,7 +96,7 @@ impl ExecutionManager {
             new_wallets_count: node_result.new_wallets.len() as i32,
             initial_balance,
             final_balance,
-            root_wallet,
+            root_address,
             time_elapsed: start_time.elapsed(),
             errors: node_result.errors,
             root_node: root_node.clone(),
@@ -285,15 +284,15 @@ impl ExecutionManager {
     ) -> Result<()> {
         let operation_span = info_span!(
             "process_operation",
-            from = %operation.from.default_signer().address(),
-            to = %operation.to.default_signer().address(),
+            from = %operation.from,
+            to = %operation.to,
             amount = ?operation.amount.map(|a| format_units(a, "ether").unwrap_or_default()),
         );
         let _guard = operation_span.enter();
 
         let tx_count = self
             .provider
-            .get_transaction_count(operation.from.default_signer().address())
+            .get_transaction_count(operation.from)
             .await
             .map_err(|e| {
                 WalletError::ProviderError(format!("Failed to get transaction count: {}", e))
@@ -301,13 +300,13 @@ impl ExecutionManager {
 
         if tx_count == 0 {
             info!(
-                address = %operation.from.default_signer().address(),
+                address = %operation.from,
                 "New wallet detected"
             );
-            new_wallets.insert(operation.from.default_signer().address());
+            new_wallets.insert(operation.from);
         }
 
-        if operation.from.default_signer().address() == operation.to.default_signer().address() {
+        if operation.from == operation.to {
             info!("Skipping self-transfer operation");
             return Ok(());
         }

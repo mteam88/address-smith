@@ -15,7 +15,7 @@ use tracing::{info, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use active_address::{
-    operations::generate_balanced_split_loops, utils::pretty_print_tree, wallet::WalletManager,
+    cache_gas::CacheLayer, operations::generate_balanced_split_loops, utils::pretty_print_tree, wallet::WalletManager
 };
 
 #[tokio::main]
@@ -59,8 +59,6 @@ async fn main() -> eyre::Result<()> {
         "Starting active-address execution"
     );
 
-    let provider = construct_provider().await?;
-
     let private_key: String = dotenv::var("PRIVATE_KEY")
         .expect("PRIVATE_KEY must be set in .env")
         .split(',')
@@ -68,7 +66,8 @@ async fn main() -> eyre::Result<()> {
         .collect();
 
     let signer: PrivateKeySigner = private_key.parse()?;
-    let root_wallet = EthereumWallet::new(signer);
+    let mut wallet = EthereumWallet::new(signer);
+    let root_address = wallet.default_signer().address();
 
     let to_activate = dotenv::var("ADDRESS_COUNT").unwrap().parse::<i32>()?;
     assert!(to_activate > 0, "ADDRESS_COUNT must be greater than 0");
@@ -92,10 +91,9 @@ async fn main() -> eyre::Result<()> {
         "Configuration loaded"
     );
 
-    let mut wallet_manager = WalletManager::new(provider).await?;
-
     let operations_tree = generate_balanced_split_loops(
-        root_wallet,
+        &mut wallet,
+        root_address,
         to_activate,
         split_loops_count,
         amount_per_wallet,
@@ -103,6 +101,11 @@ async fn main() -> eyre::Result<()> {
     )
     .await?;
     pretty_print_tree(&operations_tree);
+
+    let provider = construct_provider(wallet).await?;
+
+    let mut wallet_manager = WalletManager::new(provider).await?;
+
     wallet_manager.operations = Some(operations_tree);
 
     let execution_result = wallet_manager.parallel_execute_operations().await?;
@@ -113,11 +116,13 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-async fn construct_provider() -> eyre::Result<Arc<dyn Provider>> {
+async fn construct_provider(wallet: EthereumWallet) -> eyre::Result<Arc<dyn Provider + 'static>> {
     let provider = Arc::new(
         ProviderBuilder::new()
+            .layer(CacheLayer::new(1000))
+            .wallet(wallet)
             .connect(&dotenv::var("RPC_URL").unwrap())
-            .await?
+            .await?,
     );
     provider.client().set_poll_interval(Duration::from_secs(4));
     info!(chain_id = ?provider.get_chain_id().await?, "Connected to provider");

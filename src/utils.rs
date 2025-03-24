@@ -11,7 +11,7 @@ use crate::{
     error::{Result, WalletError},
     Operation, TreeNode,
 };
-use alloy::{network::EthereumWallet, signers::local::PrivateKeySigner};
+use alloy::signers::local::PrivateKeySigner;
 use dotenv::dotenv;
 use tracing::{info, info_span};
 
@@ -40,22 +40,21 @@ pub fn get_gas_buffer_multiplier() -> Result<u64> {
 ///
 /// # Returns
 /// * `Result<EthereumWallet>` - A new wallet instance or an error if generation fails
-pub async fn generate_wallet(backup_dir: &Path) -> Result<EthereumWallet> {
+pub async fn generate_signer(backup_dir: &Path) -> Result<PrivateKeySigner> {
     let signer = PrivateKeySigner::random();
     let address = signer.address();
 
-    let backup_span = info_span!("backup_wallet", address = %address);
+    let backup_span = info_span!("backup_signer", address = %address);
     let _guard = backup_span.enter();
 
     // backup private key to file
-    let backup_path = backup_dir.join(format!("backup_wallet_{}.txt", address));
+    let backup_path = backup_dir.join(format!("backup_signer_{}.txt", address));
     std::fs::write(backup_path.clone(), signer.to_bytes().to_string())
         .map_err(|e| WalletError::ProviderError(format!("Failed to backup private key: {}", e)))?;
 
-    info!(backup_path = ?backup_path, "Wallet backup created");
+    info!(backup_path = ?backup_path, "Signer backup created");
 
-    let wallet = EthereumWallet::new(signer);
-    Ok(wallet)
+    Ok(signer)
 }
 
 /// Fetches the current ETH/USD price from the Coinbase API.
@@ -105,8 +104,8 @@ pub fn pretty_print_tree(tree: &TreeNode<Operation>) {
         info!(
             node_id = node.id,
             depth = depth,
-            from = %node.value.from.default_signer().address(),
-            to = %node.value.to.default_signer().address(),
+            from = %node.value.from,
+            to = %node.value.to,
             "Tree node"
         );
 

@@ -3,8 +3,8 @@
 //! This module contains the main types used to represent wallet operations
 //! and their execution results.
 
-use alloy::{network::EthereumWallet, primitives::U256};
-use alloy_primitives::utils::format_units;
+use alloy::primitives::U256;
+use alloy_primitives::{utils::format_units, Address};
 use core::fmt;
 use std::{
     collections::HashSet,
@@ -44,9 +44,9 @@ impl RecordFields for NodeError {
 #[derive(Debug, Clone)]
 pub struct Operation {
     /// The wallet to draw funds from
-    pub from: EthereumWallet,
+    pub from: Address,
     /// The wallet to send the funds to
-    pub to: EthereumWallet,
+    pub to: Address,
     /// If None, the operation will send all available funds minus a gas buffer
     pub amount: Option<U256>,
 }
@@ -54,8 +54,8 @@ pub struct Operation {
 impl RecordFields for Operation {
     fn record_fields(&self) -> Vec<(&'static str, String)> {
         let mut fields = vec![
-            ("from", self.from.default_signer().address().to_string()),
-            ("to", self.to.default_signer().address().to_string()),
+            ("from", self.from.to_string()),
+            ("to", self.to.to_string()),
         ];
 
         if let Some(amount) = self.amount {
@@ -71,21 +71,21 @@ impl RecordFields for Operation {
 
 impl Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.from.default_signer().address() != self.to.default_signer().address() {
+        if self.from != self.to {
             if let Some(amount) = self.amount {
                 write!(
                     f,
                     "Transfer {} ETH from {} to {}",
                     format_units(amount, "ether").unwrap(),
-                    self.from.default_signer().address(),
-                    self.to.default_signer().address()
+                    self.from,
+                    self.to
                 )
             } else {
                 write!(
                     f,
                     "Transfer all available funds from {} to {}",
-                    self.from.default_signer().address(),
-                    self.to.default_signer().address()
+                    self.from,
+                    self.to
                 )
             }
         } else {
@@ -100,8 +100,8 @@ pub fn create_operation_span(operation: &Operation, node_id: usize) -> Span {
         Level::INFO,
         "operation",
         node_id = node_id,
-        from = %operation.from.default_signer().address(),
-        to = %operation.to.default_signer().address(),
+        from = %operation.from,
+        to = %operation.to,
         amount = ?operation.amount.map(|a| format_units(a, "ether").unwrap_or_default()),
     );
     span
@@ -116,8 +116,8 @@ pub struct ExecutionResult {
     pub initial_balance: U256,
     /// Final balance of the root wallet after all operations completed
     pub final_balance: U256,
-    /// The original wallet that initiated the operation sequence
-    pub root_wallet: EthereumWallet,
+    /// The original address that initiated the operation sequence
+    pub root_address: Address,
     /// Total time taken to execute all operations
     pub time_elapsed: Duration,
     /// List of errors that occurred during execution

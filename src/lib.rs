@@ -19,6 +19,8 @@ pub mod utils;
 /// Main wallet management functionality
 pub mod wallet;
 
+pub mod cache_gas;
+
 pub use error::{Result, WalletError};
 pub use tree::TreeNode;
 pub use types::{ExecutionResult, Operation};
