@@ -59,13 +59,7 @@ async fn main() -> eyre::Result<()> {
         "Starting active-address execution"
     );
 
-    let provider = Arc::new(
-        ProviderBuilder::new()
-            .connect(&dotenv::var("RPC_URL").unwrap())
-            .await?,
-    );
-    provider.client().set_poll_interval(Duration::from_secs(4));
-    info!(chain_id = ?provider.get_chain_id().await?, "Connected to provider");
+    let provider = construct_provider().await?;
 
     let private_key: String = dotenv::var("PRIVATE_KEY")
         .expect("PRIVATE_KEY must be set in .env")
@@ -117,4 +111,15 @@ async fn main() -> eyre::Result<()> {
 
     info!("Execution completed");
     Ok(())
+}
+
+async fn construct_provider() -> eyre::Result<Arc<dyn Provider>> {
+    let provider = Arc::new(
+        ProviderBuilder::new()
+            .connect(&dotenv::var("RPC_URL").unwrap())
+            .await?
+    );
+    provider.client().set_poll_interval(Duration::from_secs(4));
+    info!(chain_id = ?provider.get_chain_id().await?, "Connected to provider");
+    Ok(provider)
 }
