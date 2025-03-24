@@ -206,14 +206,14 @@ impl TransactionManager {
             .send_tx_envelope(tx_envelope.clone())
             .await
             .map_err(|e| {
-                WalletError::TransactionError(format!("Failed to send transaction: {}", e), None)
+                WalletError::TransactionError(format!("Failed to send transaction: {}", e), Some(*tx_envelope.hash()))
             })?
             .get_receipt()
             .await
             .map_err(|e| {
                 WalletError::TransactionError(
                     format!("Failed to get transaction receipt: {}", e),
-                    None,
+                    Some(*tx_envelope.hash()),
                 )
             })?;
 
@@ -262,7 +262,7 @@ impl TransactionManager {
                     match self.send_transaction(tx, operation.from.clone()).await {
                         Ok(_) => return Ok(()),
                         Err(e) => {
-                            // if e is transaction error, we must check if the transaction actually did land
+                            // if e is transaction error , we must check if the transaction actually did land
                             if let WalletError::TransactionError(_, Some(hash)) = e {
                                 warn!(
                                     tx_hash = %hash,
@@ -307,7 +307,6 @@ impl TransactionManager {
                     }
                 }
                 Err(e) => {
-                    // For InsufficientBalance, retry after waiting for more funds to arrive
                     if let WalletError::InsufficientBalance(msg) = &e {
                         if retry_count >= max_retries {
                             warn!(

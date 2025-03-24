@@ -12,7 +12,7 @@ env_logger = "0.10"
 eyre = "0.6"
 futures = "0.3.31"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "fmt"] }
 tracing-appender = "0.2"
 rand = "0.9.0"
 reqwest = "0.11"

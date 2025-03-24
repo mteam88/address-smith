@@ -47,6 +47,7 @@ async fn main() -> eyre::Result<()> {
                 .with_line_number(true)
                 .with_file(true)
                 .json()
+                .with_span_list(false)
                 .with_writer(non_blocking),
         )
         .with(EnvFilter::from_default_env().add_directive(Level::INFO.into()))
