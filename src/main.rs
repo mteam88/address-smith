@@ -14,7 +14,7 @@ use std::{
 use tracing::{info, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use active_address::{
+use address_smith::{
     cache_gas::CacheLayer, operations::generate_balanced_split_loops, utils::pretty_print_tree, wallet::WalletManager
 };
 

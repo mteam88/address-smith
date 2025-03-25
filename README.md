@@ -1,6 +1,6 @@
 # Address Smith
 
-A Rust library for managing Ethereum wallet operations and transactions with built-in retry mechanisms and parallel execution capabilities.
+A Rust executable for manufacturing active addresses on EVM networks, lightly optimized for resilience, speed, and efficiency.
 
 ## Features
 
