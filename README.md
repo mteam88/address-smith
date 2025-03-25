@@ -2,6 +2,8 @@
 
 A Rust executable for manufacturing active addresses on EVM networks, lightly optimized for resilience, speed, and efficiency.
 
+AI used extensively, don't blame me for bad code.
+
 ## Features
 
 - Parallel wallet operation execution with dependency management
